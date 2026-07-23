@@ -499,6 +499,9 @@ fn inquiry_collection_preserves_semantic_source_admission() {
         },
         "research": {
             "status": "success",
+            "metadata": {
+                "evidence_selection_mode": "semantic_chunk_ids_with_typed_coverage"
+            },
             "results": [{
                 "task_id": "evidence_retrieval:source:aurora",
                 "agent": "workflow",
@@ -519,11 +522,7 @@ fn inquiry_collection_preserves_semantic_source_admission() {
                         "source_id": "source:aurora",
                         "obligation_id": "migration.boundary",
                         "completion_criterion_indexes": [0],
-                        "roles": {
-                            "supporting": true,
-                            "primary": true,
-                            "independent": false
-                        }
+                        "roles": ["supporting", "primary"]
                     }],
                     "relevant_obligation_ids": ["migration.boundary"],
                     "key_evidence": [
@@ -563,6 +562,71 @@ fn inquiry_collection_preserves_semantic_source_admission() {
             independent: false,
         }]
     );
+}
+
+#[test]
+fn inquiry_collection_without_typed_selection_provenance_is_not_promoted() {
+    let query = "Assess the Aurora migration boundary";
+    let output = serde_json::json!({
+        "query": query,
+        "mode": "inquiry_collection",
+        "research": {
+            "status": "success",
+            "results": [{
+                "task_id": "unverified-result",
+                "agent": "workflow",
+                "success": true,
+                "structured": {
+                    "sources": [{
+                        "source_id": "source:aurora",
+                        "title": "Aurora migration note",
+                        "url_or_path": "https://research.example/aurora/migration",
+                        "evidence_excerpts": [{
+                            "quote_or_fact": "Aurora migration support ends with release 4."
+                        }]
+                    }],
+                    "source_coverage": [],
+                    "relevant_obligation_ids": ["migration.boundary"],
+                    "key_evidence": ["Aurora migration support ends with release 4."],
+                    "contradictions": [],
+                    "confidence": "Unverified projection.",
+                    "gaps": []
+                }
+            }]
+        }
+    });
+
+    assert!(
+        deep_research_source_catalog(query, &output.to_string(), None)
+            .expect("parse unverified inquiry collection")
+            .is_none(),
+        "an inquiry-shaped payload without the closed semantic selection marker must not become evidence"
+    );
+}
+
+#[test]
+fn source_coverage_roles_require_the_closed_durable_wire_shape() {
+    assert_eq!(
+        catalog_source_roles(Some(&serde_json::json!(["supporting", "primary"]))),
+        Some((true, false))
+    );
+    assert_eq!(
+        catalog_source_roles(Some(&serde_json::json!(["supporting", "independent"]))),
+        Some((false, true))
+    );
+    for invalid in [
+        serde_json::json!([]),
+        serde_json::json!(["primary"]),
+        serde_json::json!(["supporting", "supporting"]),
+        serde_json::json!(["supporting", "publisher"]),
+        serde_json::json!({
+            "supporting": true,
+            "primary": true,
+            "independent": false
+        }),
+    ] {
+        assert_eq!(catalog_source_roles(Some(&invalid)), None, "{invalid}");
+    }
 }
 
 #[test]

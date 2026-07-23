@@ -109,7 +109,12 @@ pub fn deep_research_source_catalog(
     let semantic_source_admission = acquisition
         .pointer("/metadata/source_selection_mode")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|mode| mode == "semantic_candidate_ids");
+        .is_some_and(|mode| {
+            matches!(
+                mode,
+                "semantic_candidate_ids" | "semantic_chunk_ids_with_typed_coverage"
+            )
+        });
 
     let mut catalog = DeepResearchSourceCatalog {
         sources: Vec::new(),
@@ -230,6 +235,13 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
     if value.get("mode").and_then(serde_json::Value::as_str) != Some("inquiry_collection") {
         return None;
     }
+    if value
+        .pointer("/research/metadata/evidence_selection_mode")
+        .and_then(serde_json::Value::as_str)
+        != Some("semantic_chunk_ids_with_typed_coverage")
+    {
+        return None;
+    }
     let results = value
         .pointer("/research/results")
         .and_then(serde_json::Value::as_array)?;
@@ -328,7 +340,7 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
             .cloned()
             .unwrap_or_else(|| serde_json::json!([])),
         "metadata": {
-            "source_selection_mode": "semantic_candidate_ids",
+            "source_selection_mode": "semantic_chunk_ids_with_typed_coverage",
         },
     }))
 }
@@ -388,20 +400,7 @@ fn catalog_source_coverage(
         if completion_criterion_indexes.len() != raw_indexes.len() {
             continue;
         }
-        let Some(roles) = object.get("roles").and_then(serde_json::Value::as_object) else {
-            continue;
-        };
-        if roles.len() != 3
-            || roles.get("supporting").and_then(serde_json::Value::as_bool) != Some(true)
-        {
-            continue;
-        }
-        let (Some(primary), Some(independent)) = (
-            roles.get("primary").and_then(serde_json::Value::as_bool),
-            roles
-                .get("independent")
-                .and_then(serde_json::Value::as_bool),
-        ) else {
+        let Some((primary, independent)) = catalog_source_roles(object.get("roles")) else {
             continue;
         };
         let coverage = DeepResearchSourceCoverage {
@@ -416,6 +415,30 @@ fn catalog_source_coverage(
     }
     retained.sort_by(|left, right| left.track_id.cmp(&right.track_id));
     retained
+}
+
+fn catalog_source_roles(value: Option<&serde_json::Value>) -> Option<(bool, bool)> {
+    let roles = value?.as_array()?;
+    if roles.is_empty() || roles.len() > 3 {
+        return None;
+    }
+    let roles = roles
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<Vec<_>>>()?;
+    let unique = roles.iter().copied().collect::<HashSet<_>>();
+    if unique.len() != roles.len()
+        || !unique.contains("supporting")
+        || unique
+            .iter()
+            .any(|role| !matches!(*role, "supporting" | "primary" | "independent"))
+    {
+        return None;
+    }
+    Some((
+        unique.contains("primary"),
+        unique.contains("independent"),
+    ))
 }
 
 pub fn materialize_deep_research_source_backed_report(

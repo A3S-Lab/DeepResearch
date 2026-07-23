@@ -382,6 +382,9 @@ fn inquiry_collection_source_output(query: &str) -> WorkflowOutput {
             "mode": "inquiry_collection",
             "research": {
                 "status": "success",
+                "metadata": {
+                    "evidence_selection_mode": "semantic_chunk_ids_with_typed_coverage"
+                },
                 "results": [{
                     "task_id": "evidence_retrieval:source:nimbus",
                     "agent": "workflow",
@@ -402,11 +405,7 @@ fn inquiry_collection_source_output(query: &str) -> WorkflowOutput {
                             "source_id": "source:nimbus",
                             "obligation_id": "support.boundary",
                             "completion_criterion_indexes": [0],
-                            "roles": {
-                                "supporting": true,
-                                "primary": true,
-                                "independent": false
-                            }
+                            "roles": ["supporting", "primary"]
                         }],
                         "relevant_obligation_ids": ["support.boundary"],
                         "key_evidence": [

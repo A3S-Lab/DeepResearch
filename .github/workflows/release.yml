@@ -1,20 +1,28 @@
-name: CI
+name: Release
 
 on:
   push:
-  pull_request:
+    tags:
+      - "v*.*.*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Verify tag and package version
+        id: version
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
@@ -35,9 +43,15 @@ jobs:
             src/workflow/retrieval_execution.js |
             node --check -
           node --check src/workflow/generation.js
-      - name: Check documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --locked
-      - name: Check release package
+      - name: Build release package
         run: cargo package --locked
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "target/package/a3s-deep-research-${VERSION}.crate" \
+            --generate-notes \
+            --title "A3S DeepResearch ${GITHUB_REF_NAME}" \
+            --verify-tag

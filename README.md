@@ -85,9 +85,12 @@ confused with evidence admission.
 Add the crate and implement the four ports for the host product:
 
 ```rust
-use a3s_deep_research::engine::{
-    DeepResearchEngine, EngineLimits, ProgressPort, PublicationPort,
-    StructuredGenerationPort, WorkflowExecutionPort,
+use a3s_deep_research::{
+    engine::{
+        DeepResearchEngine, EngineLimits, ProgressPort, PublicationPort,
+        StructuredGenerationPort, WorkflowExecutionPort,
+    },
+    planner::deep_research_loop_contract,
 };
 
 async fn research(
@@ -97,11 +100,20 @@ async fn research(
     progress: &dyn ProgressPort,
     query: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let current_date = "2026-07-23";
+    let evidence_scope = "web_and_workspace";
     let input = serde_json::json!({
         "run_id": "product-run-id",
         "input": {
             "query": query,
-            "current_date": "2026-07-23"
+            "current_date": current_date,
+            "evidence_scope": evidence_scope,
+            "loop_contract": deep_research_loop_contract(
+                query,
+                current_date,
+                evidence_scope,
+                4,
+            )
         }
     });
 
@@ -134,7 +146,9 @@ src/
 
 ```bash
 cargo fmt --all -- --check
-cargo test
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo package --locked
 ```
 
 The integration suite includes domain-agnostic contract and provenance tests
