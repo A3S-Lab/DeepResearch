@@ -46,6 +46,19 @@ source-backed Markdown and HTML report before attempting synthesis. A failed,
 timed-out, or invalid proposal cannot erase that artifact. If no source passes
 admission, the engine publishes an explicit no-evidence boundary report.
 
+Semantic source admission is preserved as typed provenance from retrieval to
+publication. The report compiler also preserves each source's exact research
+track, completion-criterion, primary-source, and independent-source edges.
+Comprehensive reports are admitted only when every material track has findings
+that close all declared criteria and satisfy the declared source roles. The
+published findings remain grouped by those research tracks.
+
+Discovery fallback is deliberately audit-only for web evidence. Search rank,
+query-word overlap, publisher names, TLDs, and maintained site allowlists never
+promote a fallback web result into claim evidence. A web source becomes
+claim-eligible only through the bounded semantic source-selection path;
+workspace evidence remains eligible inside the user-authorized local scope.
+
 ## Ownership Boundary
 
 | Layer | Owns |
@@ -64,7 +77,8 @@ The product adapter implements four asynchronous ports:
 - `ProgressPort` for product-specific progress events.
 
 Search-provider selection and provider fallback remain runtime policy. They are
-not encoded as topic logic in the engine.
+not encoded as topic logic in the engine, and a provider fallback is never
+confused with evidence admission.
 
 ## Integration
 
@@ -123,8 +137,10 @@ cargo fmt --all -- --check
 cargo test
 ```
 
-The integration suite includes a domain-agnostic contract test that preserves
-exact-query authority and rejects topic-specific production routing.
+The integration suite includes domain-agnostic contract and provenance tests
+that preserve exact-query authority, keep semantic selection closed over exact
+candidate IDs, retain typed research coverage, and reject topic-specific
+production routing.
 
 ## License
 

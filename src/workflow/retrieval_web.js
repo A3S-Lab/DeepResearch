@@ -285,17 +285,7 @@
     const selected = [];
     const selectedIds = new Set();
     const selectedHosts = new Set();
-    const rankedCandidates = candidates
-      .map((candidate, index) => ({
-        candidate,
-        index,
-        priority: fallbackCandidatePriority(candidate),
-      }))
-      .sort((left, right) =>
-        right.priority - left.priority ||
-        left.index - right.index
-      )
-      .map((entry) => entry.candidate);
+    const orderedCandidates = candidates.slice();
     const admit = (candidate) => {
       if (
         !candidate ||
@@ -313,9 +303,9 @@
 
     // Preserve explicit plan seeds first. Then reserve one candidate unique to
     // each provider query before filling from distinct hosts. This fallback is
-    // acquisition-only: fetched text carries fallback provenance and must pass
-    // deterministic query, publisher-accountability, and Host publication
-    // gates before it can support a conclusion.
+    // acquisition-only: fetched text carries fallback provenance and stays
+    // audit-only unless a later closed semantic evidence pass admits it.
+    // Discovery rank never becomes source authority.
     for (const candidate of candidates) {
       const queryIndexes = Array.isArray(candidate.query_indexes)
         ? candidate.query_indexes
@@ -326,19 +316,19 @@
       ? plan.search_queries.length
       : 0;
     for (let queryIndex = 0; queryIndex < queryCount; queryIndex += 1) {
-      admit(rankedCandidates.find((candidate) =>
+      admit(orderedCandidates.find((candidate) =>
         !selectedIds.has(candidate.candidate_id) &&
         Array.isArray(candidate.query_indexes) &&
         candidate.query_indexes.length === 1 &&
         candidate.query_indexes[0] === queryIndex
       ));
     }
-    for (const candidate of rankedCandidates) {
+    for (const candidate of orderedCandidates) {
       if (selected.length >= fetchLimit) break;
       const host = urlHost(candidate.url);
       if (host && !selectedHosts.has(host)) admit(candidate);
     }
-    for (const candidate of rankedCandidates) {
+    for (const candidate of orderedCandidates) {
       if (selected.length >= fetchLimit) break;
       admit(candidate);
     }
@@ -413,30 +403,6 @@
     const selected = candidates.filter((candidate) =>
       semanticIds.has(candidate.candidate_id)
     );
-    const selectedHosts = new Set(
-      selected.map((candidate) => urlHost(candidate.url)).filter(Boolean)
-    );
-    const accountableAlternatives = candidates
-      .map((candidate, index) => ({
-        candidate,
-        index,
-        priority: fallbackCandidatePriority(candidate),
-      }))
-      .filter((entry) =>
-        entry.priority >= 2 && !semanticIds.has(entry.candidate.candidate_id)
-      )
-      .sort((left, right) =>
-        right.priority - left.priority ||
-        left.index - right.index
-      );
-    for (const entry of accountableAlternatives) {
-      if (selected.length >= fetchLimit) break;
-      const host = urlHost(entry.candidate.url);
-      if (host && selectedHosts.has(host)) continue;
-      selected.push(entry.candidate);
-      semanticIds.add(entry.candidate.candidate_id);
-      if (host) selectedHosts.add(host);
-    }
     return {
       candidates: selected,
       mode: "semantic_candidate_ids",

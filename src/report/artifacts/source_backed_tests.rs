@@ -115,7 +115,7 @@ fn source_instructions_render_as_inert_localized_evidence() {
 }
 
 #[test]
-fn rejects_off_topic_sources_and_web_chrome_before_publication() {
+fn rejects_web_chrome_and_keeps_the_substantive_source() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -218,7 +218,7 @@ fn strips_embedded_constructor_script_tail_without_dropping_prose_prefix() {
 #[test]
 fn live_page_noise_is_removed_while_link_heavy_result_text_survives() {
     let query = "世界杯战况";
-    let output = fallback_source_backed_fixture(
+    let output = source_backed_fixture(
         query,
         serde_json::json!([
             {
@@ -357,119 +357,75 @@ fn rejects_serialized_hydration_payloads_without_dropping_prose_siblings() {
 }
 
 #[test]
-fn marks_streaming_and_community_sources_ineligible_for_report_claims() {
-    let query = "世界杯战况";
+fn semantic_admission_is_not_reclassified_from_source_words_or_hosts() {
+    let query = "Assess the Aurora release boundary";
     let output = source_backed_fixture(
         query,
         serde_json::json!([
             source_fixture(
                 "bootstrap-web-source-1",
-                "世界杯赛事聚合",
-                "https://scores.example.test/world-cup",
-                "在 Skypiea.tv 免费观看，高清流畅，无需注册；该页面随后列出世界杯比分。"
+                "Aurora community note",
+                "https://community.example/aurora",
+                "This user-authored note describes the Aurora release boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-2",
-                "小红书世界杯集锦",
-                "https://www.xiaohongshu.com/worldcup/match",
-                "用户发布的世界杯比赛集锦与个人解说。"
+                "Aurora publisher disclaimer",
+                "https://publisher.example/aurora",
+                "The views expressed are solely those of the author. The note describes the Aurora release boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-3",
-                "世界杯赛事机构公告",
-                "https://institution.example.test/world-cup",
-                "赛事机构发布了世界杯比赛结果与完整赛程。"
+                "Aurora institutional record",
+                "https://records.example/aurora",
+                "The institutional record describes the Aurora release boundary."
             )
         ]),
     );
 
     let catalog = deep_research_source_catalog(query, &output.to_string(), None)
-        .expect("parse source trust catalog")
+        .expect("parse semantic source catalog")
         .expect("retain source catalog");
 
-    assert_eq!(
+    assert_eq!(catalog.sources.len(), 3);
+    assert!(
         catalog
             .sources
             .iter()
-            .map(|source| source.claim_eligible)
-            .collect::<Vec<_>>(),
-        [false, false, true]
+            .all(|source| source.claim_eligible && source.semantically_admitted),
+        "semantic provenance, not lexical classification, owns admission: {catalog:#?}"
     );
 }
 
 #[test]
-fn marks_self_publishing_platform_disclaimers_ineligible_for_report_claims() {
-    let query = "世界杯战况";
-    let output = source_backed_fixture(
-        query,
-        serde_json::json!([
-            source_fixture(
-                "bootstrap-web-source-1",
-                "世界杯战况：18队出线8队出局",
-                "https://www.sohu.com/a/1042019748_100247297",
-                "2026年6月26日，截至目前已有18支球队出线。平台声明：该文观点仅代表作者本人，搜狐号系信息发布平台，搜狐仅提供信息存储空间服务。"
-            ),
-            source_fixture(
-                "bootstrap-web-source-2",
-                "世界杯决赛数据盘点",
-                "https://k.sina.cn/article_7879995911_1d5af320706802de0u.html",
-                "西班牙在决赛中1-0击败阿根廷。特别声明：以上文章内容仅代表作者本人观点，不代表新浪网观点或立场。"
-            ),
-            source_fixture(
-                "bootstrap-web-source-3",
-                "世界杯大结局：西班牙夺冠",
-                "https://sports.ifeng.com/c/8uu05FDusPD",
-                "西班牙在决赛中1-0击败阿根廷。以上作品为凤凰网旗下自媒体平台用户上传并发布，本平台仅提供信息存储空间服务。"
-            ),
-            source_fixture(
-                "bootstrap-web-source-4",
-                "世界杯赛事机构公告",
-                "https://www.fifa.com/tournaments/world-cup/2026/results",
-                "世界杯赛事机构于2026年7月20日发布了最终赛果。"
-            )
-        ]),
-    );
-
-    let catalog = deep_research_source_catalog(query, &output.to_string(), None)
-        .expect("parse publisher-accountability catalog")
-        .expect("retain source catalog");
-
-    assert_eq!(catalog.sources.len(), 4);
-    assert!(!catalog.sources[0].claim_eligible, "{catalog:#?}");
-    assert!(!catalog.sources[1].claim_eligible, "{catalog:#?}");
-    assert!(!catalog.sources[2].claim_eligible, "{catalog:#?}");
-    assert!(catalog.sources[3].claim_eligible, "{catalog:#?}");
-}
-
-#[test]
-fn fallback_provenance_rejects_lookalike_and_unaccountable_publishers() {
-    let query = "世界杯战况";
+fn fallback_provenance_keeps_web_sources_audit_only_and_admits_local_evidence() {
+    let query = "Assess the Aurora release boundary";
     let output = fallback_source_backed_fixture(
         query,
         serde_json::json!([
             source_fixture(
                 "bootstrap-web-source-1",
-                "2026 世界杯官方网站",
-                "https://zh.2026fifa-worldcup-sohu.com.cn/news.html",
-                "该页面自称 FIFA 官方认证并发布世界杯决赛赛果。"
+                "Unverified Aurora mirror",
+                "https://official-aurora.attacker.example/release",
+                "This mirror claims to describe the Aurora release boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-2",
-                "2026 世界杯专题",
-                "https://sports.163.com/worldcup2026",
-                "网易体育报道了世界杯决赛赛果。"
+                "Public Aurora record",
+                "https://records.example.gov/aurora/release",
+                "The public record describes the Aurora release boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-3",
-                "世界杯匿名聚合页",
-                "https://scores.example.test/world-cup",
-                "该未知发布者汇总了世界杯比赛结果。"
+                "Academic Aurora record",
+                "https://research.example.edu.cn/aurora/release",
+                "The academic record describes the Aurora release boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-4",
-                "世界杯机构资料",
-                "https://www.un.org/zh/news/world-cup",
-                "联合国网站发布了世界杯赛程与赛果资料。"
+                "Workspace Aurora record",
+                "docs/aurora-release.md",
+                "The workspace record describes the Aurora release boundary."
             )
         ]),
     );
@@ -484,27 +440,27 @@ fn fallback_provenance_rejects_lookalike_and_unaccountable_publishers() {
             .iter()
             .map(|source| source.claim_eligible)
             .collect::<Vec<_>>(),
-        [false, true, false, true],
+        [false, false, false, true],
         "{catalog:#?}"
     );
-    assert!(!catalog_source_is_institutional(
+    assert!(!deterministic_fallback_claim_anchor(
         "https://docs.attacker.example/reference"
     ));
-    assert!(!catalog_source_is_institutional(
+    assert!(!deterministic_fallback_claim_anchor(
         "https://records.gov.attacker.example/reference"
     ));
 }
 
 #[test]
-fn semantic_admission_cannot_promote_a_protected_publisher_lookalike() {
-    let query = "世界杯战况";
+fn semantic_admission_does_not_depend_on_publisher_name_patterns() {
+    let query = "Assess the Aurora release boundary";
     let output = source_backed_fixture(
         query,
         serde_json::json!([source_fixture(
             "bootstrap-web-source-1",
-            "2026 世界杯官方网站",
-            "https://zh.2026fifa-worldcup-sohu.com.cn/news.html",
-            "该页面自称 FIFA 官方认证并发布世界杯决赛赛果。"
+            "Aurora release record",
+            "https://official-aurora.attacker.example/release",
+            "The selected record describes the Aurora release boundary."
         )]),
     );
 
@@ -512,7 +468,101 @@ fn semantic_admission_cannot_promote_a_protected_publisher_lookalike() {
         .expect("parse semantically admitted source catalog")
         .expect("retain the source for audit");
 
-    assert!(!catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(catalog.sources[0].semantically_admitted, "{catalog:#?}");
+}
+
+#[test]
+fn inquiry_collection_preserves_semantic_source_admission() {
+    let query = "Assess the Aurora migration boundary";
+    let output = serde_json::json!({
+        "query": query,
+        "mode": "inquiry_collection",
+        "acquisition": {
+            "status": "partial",
+            "packet": {
+                "version": 1,
+                "sources": [{
+                    "source_id": "bootstrap-web-source-1",
+                    "title": "Unselected discovery result",
+                    "url_or_path": "https://discovery.example/aurora",
+                    "reliability": "fetched",
+                    "chunks": [{
+                        "chunk_id": "bootstrap-web-source-1:chunk:1",
+                        "text": "This raw discovery result was not retained by semantic evidence selection."
+                    }]
+                }]
+            },
+            "metadata": {
+                "source_selection_mode": "bounded_discovery_fallback"
+            }
+        },
+        "research": {
+            "status": "success",
+            "results": [{
+                "task_id": "evidence_retrieval:source:aurora",
+                "agent": "workflow",
+                "success": true,
+                "structured": {
+                    "summary": "Semantic selection retained one fetched evidence chunk.",
+                    "sources": [{
+                        "source_id": "source:aurora",
+                        "title": "Aurora migration record",
+                        "url_or_path": "https://research.example/aurora/migration",
+                        "reliability": "fetched",
+                        "evidence_excerpts": [{
+                            "focus": "Establish the supported migration boundary.",
+                            "quote_or_fact": "Aurora migration support ends with release 4."
+                        }]
+                    }],
+                    "source_coverage": [{
+                        "source_id": "source:aurora",
+                        "obligation_id": "migration.boundary",
+                        "completion_criterion_indexes": [0],
+                        "roles": {
+                            "supporting": true,
+                            "primary": true,
+                            "independent": false
+                        }
+                    }],
+                    "relevant_obligation_ids": ["migration.boundary"],
+                    "key_evidence": [
+                        "Aurora migration support ends with release 4."
+                    ],
+                    "contradictions": [],
+                    "confidence": "Closed-evidence review required.",
+                    "gaps": []
+                }
+            }],
+            "warnings": {
+                "collection_errors": []
+            }
+        }
+    });
+
+    let catalog = deep_research_source_catalog(query, &output.to_string(), None)
+        .expect("parse inquiry collection")
+        .expect("retain semantically admitted source");
+
+    assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
+    assert_eq!(
+        catalog.sources[0].anchor,
+        "https://research.example/aurora/migration"
+    );
+    assert!(
+        catalog.sources[0].claim_eligible,
+        "semantic admission must survive the inquiry projection: {catalog:#?}"
+    );
+    assert!(catalog.sources[0].semantically_admitted);
+    assert_eq!(
+        catalog.sources[0].coverage,
+        [DeepResearchSourceCoverage {
+            track_id: "migration.boundary".to_string(),
+            completion_criterion_indexes: vec![0],
+            primary: true,
+            independent: false,
+        }]
+    );
 }
 
 #[test]
@@ -531,9 +581,11 @@ fn source_snapshot_selects_two_readable_excerpts_instead_of_navigation_piles() {
             "世界杯赛后还公布了个人奖项。".to_string(),
         ],
         claim_eligible: true,
+        semantically_admitted: true,
+        coverage: Vec::new(),
     };
 
-    let selected = selected_source_chunks("世界杯战况", &source);
+    let selected = selected_source_chunks(&source);
 
     assert_eq!(selected.len(), 2, "{selected:#?}");
     assert!(selected.iter().all(|excerpt| !excerpt.contains("![")));
@@ -543,7 +595,7 @@ fn source_snapshot_selects_two_readable_excerpts_instead_of_navigation_piles() {
 #[test]
 fn source_backed_report_visually_marks_sources_that_cannot_support_conclusions() {
     let query = "世界杯战况";
-    let output = source_backed_fixture(
+    let output = fallback_source_backed_fixture(
         query,
         serde_json::json!([
             source_fixture(
@@ -555,7 +607,7 @@ fn source_backed_report_visually_marks_sources_that_cannot_support_conclusions()
             source_fixture(
                 "bootstrap-web-source-2",
                 "世界杯赛事机构公告",
-                "https://www.fifa.com/tournaments/world-cup/2026/results",
+                "evidence/world-cup-results.md",
                 "世界杯赛事机构发布了最终赛果。"
             )
         ]),
@@ -575,7 +627,7 @@ fn source_backed_report_visually_marks_sources_that_cannot_support_conclusions()
 
     assert!(markdown.contains("证据资格：不可用于结论"), "{markdown}");
     assert!(
-        markdown.contains("低可信、自媒体或缺少可核查发布责任"),
+        markdown.contains("未通过本次运行的结构化证据准入"),
         "{markdown}"
     );
     assert_eq!(markdown.matches("证据资格：不可用于结论").count(), 1);
@@ -708,7 +760,7 @@ fn ineligible_audit_sources_do_not_poison_synthesized_quality_metrics() {
         DeepResearchEvidenceFirstPublication::Synthesized,
         quality,
     )
-    .expect("one verified institutional source may coexist with audit-only sources");
+    .expect("one semantically admitted source may coexist with audit-only sources");
 
     let invalid = DeepResearchPublicationQuality {
         cited_source_count: 2,

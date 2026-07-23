@@ -22,6 +22,16 @@ pub struct DeepResearchCatalogSource {
     pub anchor: String,
     pub chunks: Vec<String>,
     pub claim_eligible: bool,
+    pub semantically_admitted: bool,
+    pub coverage: Vec<DeepResearchSourceCoverage>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeepResearchSourceCoverage {
+    pub track_id: String,
+    pub completion_criterion_indexes: Vec<usize>,
+    pub primary: bool,
+    pub independent: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,9 +82,12 @@ pub fn deep_research_source_catalog(
     }
 
     let selected_acquisition = selected_research_acquisition(&value);
-    let Some(acquisition) = value
-        .get("acquisition")
-        .or(selected_acquisition.as_ref())
+    // An inquiry collection is the Host's closed semantic projection. Prefer
+    // it over any raw bootstrap acquisition that may also be retained in the
+    // workflow envelope for audit or replay.
+    let Some(acquisition) = selected_acquisition
+        .as_ref()
+        .or_else(|| value.get("acquisition"))
     else {
         return Ok(None);
     };
@@ -93,8 +106,8 @@ pub fn deep_research_source_catalog(
     if raw_sources.is_empty() {
         return Ok(None);
     }
-    let semantic_source_admission = value
-        .pointer("/acquisition/metadata/source_selection_mode")
+    let semantic_source_admission = acquisition
+        .pointer("/metadata/source_selection_mode")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|mode| mode == "semantic_candidate_ids");
 
@@ -115,7 +128,7 @@ pub fn deep_research_source_catalog(
             catalog.omitted_source_count += 1;
             continue;
         };
-        if !source_ids.insert(source_id) {
+        if !source_ids.insert(source_id.clone()) {
             catalog.omitted_source_count += 1;
             continue;
         }
@@ -140,8 +153,8 @@ pub fn deep_research_source_catalog(
             catalog.omitted_source_count += 1;
             continue;
         };
-        let claim_eligible =
-            catalog_source_claim_eligible(&anchor, raw_chunks, semantic_source_admission);
+        let claim_eligible = catalog_source_claim_eligible(&anchor, semantic_source_admission);
+        let coverage = catalog_source_coverage(raw_source, &source_id);
 
         let mut chunks = Vec::new();
         for raw_chunk in raw_chunks {
@@ -176,15 +189,15 @@ pub fn deep_research_source_catalog(
             catalog.omitted_source_count += 1;
             continue;
         }
-        if !semantic_source_admission && !catalog_source_matches_query(query, &title, &chunks) {
-            catalog.omitted_source_count += 1;
-            catalog.omitted_chunk_count += chunks.len();
-            continue;
-        }
-
         if let Some(index) = source_by_anchor.get(&anchor).copied() {
             let retained_source = &mut catalog.sources[index];
             retained_source.claim_eligible &= claim_eligible;
+            retained_source.semantically_admitted |= semantic_source_admission;
+            for binding in coverage {
+                if !retained_source.coverage.contains(&binding) {
+                    retained_source.coverage.push(binding);
+                }
+            }
             let retained = &mut retained_source.chunks;
             for chunk in chunks {
                 if !retained.contains(&chunk) {
@@ -201,6 +214,8 @@ pub fn deep_research_source_catalog(
             anchor,
             chunks,
             claim_eligible,
+            semantically_admitted: semantic_source_admission,
+            coverage,
         });
     }
 
@@ -270,12 +285,29 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
             if chunks.is_empty() {
                 continue;
             }
+            let source_coverage = structured
+                .get("source_coverage")
+                .and_then(serde_json::Value::as_array)
+                .map(|bindings| {
+                    bindings
+                        .iter()
+                        .filter(|binding| {
+                            binding
+                                .get("source_id")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(source_id.as_str())
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             sources.push(serde_json::json!({
                 "source_id": source_id,
                 "title": source.get("title").cloned().unwrap_or(serde_json::Value::Null),
                 "url_or_path": source.get("url_or_path").cloned().unwrap_or(serde_json::Value::Null),
                 "reliability": source.get("reliability").cloned().unwrap_or(serde_json::Value::Null),
                 "chunks": chunks,
+                "source_coverage": source_coverage,
             }));
         }
     }
@@ -299,6 +331,91 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
             "source_selection_mode": "semantic_candidate_ids",
         },
     }))
+}
+
+fn catalog_source_coverage(
+    source: &serde_json::Value,
+    source_id: &str,
+) -> Vec<DeepResearchSourceCoverage> {
+    let Some(bindings) = source
+        .get("source_coverage")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut retained = Vec::new();
+    for binding in bindings {
+        let Some(object) = binding.as_object() else {
+            continue;
+        };
+        if object.len() != 4
+            || object
+                .get("source_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(source_id)
+        {
+            continue;
+        }
+        let Some(track_id) = object
+            .get("obligation_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| stable_catalog_identity(value))
+        else {
+            continue;
+        };
+        let Some(raw_indexes) = object
+            .get("completion_criterion_indexes")
+            .and_then(serde_json::Value::as_array)
+            .filter(|indexes| !indexes.is_empty() && indexes.len() <= 8)
+        else {
+            continue;
+        };
+        let Some(mut completion_criterion_indexes) = raw_indexes
+            .iter()
+            .map(|index| {
+                index
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value < 8)
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        completion_criterion_indexes.sort_unstable();
+        completion_criterion_indexes.dedup();
+        if completion_criterion_indexes.len() != raw_indexes.len() {
+            continue;
+        }
+        let Some(roles) = object.get("roles").and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        if roles.len() != 3
+            || roles.get("supporting").and_then(serde_json::Value::as_bool) != Some(true)
+        {
+            continue;
+        }
+        let (Some(primary), Some(independent)) = (
+            roles.get("primary").and_then(serde_json::Value::as_bool),
+            roles
+                .get("independent")
+                .and_then(serde_json::Value::as_bool),
+        ) else {
+            continue;
+        };
+        let coverage = DeepResearchSourceCoverage {
+            track_id: track_id.to_string(),
+            completion_criterion_indexes,
+            primary,
+            independent,
+        };
+        if !retained.contains(&coverage) {
+            retained.push(coverage);
+        }
+    }
+    retained.sort_by(|left, right| left.track_id.cmp(&right.track_id));
+    retained
 }
 
 pub fn materialize_deep_research_source_backed_report(
@@ -860,5 +977,5 @@ fn catalog_serialized_or_script_payload(value: &str) -> bool {
         || (css_property_count >= 3 && value.contains('{') && value.contains('}'))
 }
 
-include!("source_backed/matching.rs");
+include!("source_backed/language.rs");
 include!("source_backed/artifact_validation.rs");

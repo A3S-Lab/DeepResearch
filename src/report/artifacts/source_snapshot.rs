@@ -18,7 +18,7 @@ fn deep_research_source_backed_markdown(
                 labels.ineligible_heading, labels.ineligible_explanation
             ));
         }
-        for chunk in selected_source_chunks(query, source) {
+        for chunk in selected_source_chunks(source) {
             markdown.push('\n');
             markdown.push_str(&fenced_catalog_text(chunk));
             markdown.push('\n');
@@ -76,7 +76,7 @@ fn source_backed_labels(query: &str) -> SourceBackedLabels {
             limitations: "此结果保留相关来源摘录和链接，但不声称已完成全部分析，也不声称这些摘录覆盖了问题的所有方面。",
             sources_heading: "来源",
             ineligible_heading: "证据资格：不可用于结论",
-            ineligible_explanation: "该来源属于低可信、自媒体或缺少可核查发布责任的材料，仅保留用于核查检索边界。",
+            ineligible_explanation: "该来源未通过本次运行的结构化证据准入，仅保留用于核查检索边界。",
             ineligible_short: "不可用于结论",
             omissions: |sources, chunks| {
                 format!("安全边界另行省略了 {sources} 个来源和 {chunks} 个来源片段。")
@@ -91,7 +91,7 @@ fn source_backed_labels(query: &str) -> SourceBackedLabels {
             limitations: "This result preserves relevant source excerpts and links, but it does not claim that analysis is complete or that the excerpts cover every aspect of the question.",
             sources_heading: "Sources",
             ineligible_heading: "Claim eligibility: not eligible for conclusions",
-            ineligible_explanation: "This low-trust, self-published, or unaccountable source is retained only for auditing the retrieval boundary.",
+            ineligible_explanation: "This source did not pass the run's structured evidence-admission boundary and is retained only for auditing retrieval.",
             ineligible_short: "not eligible for conclusions",
             omissions: |sources, chunks| {
                 format!("Safety bounds omitted {sources} source(s) and {chunks} source excerpt(s).")
@@ -100,44 +100,26 @@ fn source_backed_labels(query: &str) -> SourceBackedLabels {
     }
 }
 
-fn selected_source_chunks<'a>(query: &str, source: &'a DeepResearchCatalogSource) -> Vec<&'a str> {
+fn selected_source_chunks(source: &DeepResearchCatalogSource) -> Vec<&str> {
     let maximum = if source.claim_eligible {
         SOURCE_CATALOG_MAX_CHUNKS_PER_REPORT_SOURCE
     } else {
         SOURCE_CATALOG_MAX_CHUNKS_PER_INELIGIBLE_REPORT_SOURCE
     };
-    ranked_source_chunks(query, source, maximum)
+    readable_source_chunks(source, maximum)
 }
 
-fn selected_source_chunks_for_proposal<'a>(
-    query: &str,
-    source: &'a DeepResearchCatalogSource,
-) -> Vec<&'a str> {
-    ranked_source_chunks(
-        query,
-        source,
-        SOURCE_CATALOG_MAX_CHUNKS_PER_PROPOSAL_SOURCE,
-    )
+fn selected_source_chunks_for_proposal(source: &DeepResearchCatalogSource) -> Vec<&str> {
+    readable_source_chunks(source, SOURCE_CATALOG_MAX_CHUNKS_PER_PROPOSAL_SOURCE)
 }
 
-fn ranked_source_chunks<'a>(
-    query: &str,
-    source: &'a DeepResearchCatalogSource,
-    maximum: usize,
-) -> Vec<&'a str> {
-    let features = source_backed_query_features(query);
+fn readable_source_chunks(source: &DeepResearchCatalogSource, maximum: usize) -> Vec<&str> {
     let mut ranked = source
         .chunks
         .iter()
         .enumerate()
         .map(|(index, chunk)| {
-            let lower = chunk.to_lowercase();
-            let overlap = features
-                .iter()
-                .filter(|feature| lower.contains(feature.as_str()))
-                .map(|feature| feature.chars().count())
-                .sum::<usize>();
-            let score = overlap as i64 * 24 + catalog_excerpt_readability_score(chunk);
+            let score = catalog_excerpt_readability_score(chunk);
             (index, score)
         })
         .collect::<Vec<_>>();

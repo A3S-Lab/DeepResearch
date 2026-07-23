@@ -90,6 +90,26 @@ pub fn deep_research_report_context_from_plan(
                     })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let evidence_requirements = object
+            .get("evidence_requirements")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                "DeepResearch report plan track omitted evidence requirements".to_string()
+            })?;
+        let primary_source_required = evidence_requirements
+            .get("primary_source_required")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                "DeepResearch report plan track omitted boolean `primary_source_required`"
+                    .to_string()
+            })?;
+        let independent_corroboration_required = evidence_requirements
+            .get("independent_corroboration_required")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                "DeepResearch report plan track omitted boolean `independent_corroboration_required`"
+                    .to_string()
+            })?;
         tracks.push(serde_json::json!({
             "id": text("id")?,
             "title": text("title")?,
@@ -101,6 +121,10 @@ pub fn deep_research_report_context_from_plan(
                     "DeepResearch report plan track omitted boolean `material`".to_string()
                 })?,
             "completion_criteria": criteria,
+            "evidence_requirements": {
+                "primary_source_required": primary_source_required,
+                "independent_corroboration_required": independent_corroboration_required,
+            },
         }));
     }
     Ok(DeepResearchReportContext {
@@ -121,6 +145,10 @@ fn focused_report_context() -> DeepResearchReportContext {
             "focus": "Answer the user's request from the closed evidence.",
             "material": true,
             "completion_criteria": ["The requested answer is directly supported."],
+            "evidence_requirements": {
+                "primary_source_required": false,
+                "independent_corroboration_required": false,
+            },
         })],
     }
 }
