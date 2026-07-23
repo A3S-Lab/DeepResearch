@@ -7,6 +7,9 @@ const SOURCE_CATALOG_MAX_CHUNKS_PER_PROPOSAL_SOURCE: usize = 4;
 const SOURCE_CATALOG_MAX_CHUNKS_PER_INELIGIBLE_REPORT_SOURCE: usize = 1;
 const SOURCE_CATALOG_MAX_CHUNK_CHARS: usize = 700;
 const SOURCE_CATALOG_MAX_TITLE_CHARS: usize = 240;
+const SOURCE_BACKED_ARTIFACT_MARKER: &str =
+    "A3S_DEEP_RESEARCH_ARTIFACT:source_backed:v1";
+const NO_EVIDENCE_ARTIFACT_MARKER: &str = "A3S_DEEP_RESEARCH_ARTIFACT:no_evidence:v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeepResearchSourceCatalog {
@@ -106,15 +109,10 @@ pub fn deep_research_source_catalog(
     if raw_sources.is_empty() {
         return Ok(None);
     }
-    let semantic_source_admission = acquisition
-        .pointer("/metadata/source_selection_mode")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|mode| {
-            matches!(
-                mode,
-                "semantic_candidate_ids" | "semantic_chunk_ids_with_typed_coverage"
-            )
-        });
+    // Only the Host-projected inquiry collection is a closed semantic
+    // admission. Raw acquisition metadata records transport history and cannot
+    // promote fetched bytes merely by naming a selector mode.
+    let semantic_source_admission = selected_acquisition.is_some();
 
     let mut catalog = DeepResearchSourceCatalog {
         sources: Vec::new(),
@@ -158,7 +156,7 @@ pub fn deep_research_source_catalog(
             catalog.omitted_source_count += 1;
             continue;
         };
-        let claim_eligible = catalog_source_claim_eligible(&anchor, semantic_source_admission);
+        let claim_eligible = semantic_source_admission;
         let coverage = catalog_source_coverage(raw_source, &source_id);
 
         let mut chunks = Vec::new();
@@ -452,7 +450,10 @@ pub fn materialize_deep_research_source_backed_report(
         return Ok(None);
     };
     let markdown = deep_research_source_backed_markdown(query, &catalog);
-    let html = deep_research_completed_report_html(query, &markdown);
+    let html = format!(
+        "<!-- {SOURCE_BACKED_ARTIFACT_MARKER} -->\n{}",
+        deep_research_degraded_report_html(query, &markdown)
+    );
     let slug = deep_research_report_slug(query);
     let rel_html = format!(".a3s/research/{slug}/index.html");
     let (root, report_dir) = prepare_research_report_directory(workspace, &slug)?;
@@ -473,31 +474,14 @@ pub fn materialize_deep_research_no_evidence_report(
     workspace: &Path,
     query: &str,
 ) -> Result<ResearchReportArtifacts, String> {
-    let chinese = query.chars().any(source_backed_han_character);
     let title = markdown_plain_text(&query.chars().take(180).collect::<String>());
-    let (status, status_text, limitations, limitation_text, sources, source_text) = if chinese {
-        (
-            "证据状态",
-            "本次检索没有获得可安全发布的来源文字，因此不生成领域结论。",
-            "限制",
-            "此页面只说明证据边界；它不把检索失败解释为不存在相关事实，也不建议据此作出决定。",
-            "来源",
-            "没有可安全发布的来源。",
-        )
-    } else {
-        (
-            "Evidence Status",
-            "This retrieval obtained no source text that can be published safely, so no domain conclusion is generated.",
-            "Limitations",
-            "This page states only the evidence boundary. It does not treat retrieval failure as proof that relevant facts do not exist and should not be used alone for a decision.",
-            "Sources",
-            "No safely publishable source was obtained.",
-        )
-    };
     let markdown = format!(
-        "# {title}\n\n## {status}\n\n{status_text}\n\n## {limitations}\n\n{limitation_text}\n\n## {sources}\n\n{source_text}\n"
+        "# {title}\n\n<!-- {NO_EVIDENCE_ARTIFACT_MARKER} -->\n\n## Evidence Status\n\nThis retrieval obtained no source text that can be published safely, so no domain conclusion is generated.\n\n## Limitations\n\nThis page states only the evidence boundary. It does not treat retrieval failure as proof that relevant facts do not exist and should not be used alone for a decision.\n\n## Sources\n\nNo safely publishable source was obtained.\n"
     );
-    let html = deep_research_completed_report_html(query, &markdown);
+    let html = format!(
+        "<!-- {NO_EVIDENCE_ARTIFACT_MARKER} -->\n{}",
+        deep_research_degraded_report_html(query, &markdown)
+    );
     let slug = deep_research_report_slug(query);
     let rel_html = format!(".a3s/research/{slug}/index.html");
     let (root, report_dir) = prepare_research_report_directory(workspace, &slug)?;
@@ -630,7 +614,7 @@ fn deep_research_publication_quality(
 }
 
 fn validate_deep_research_publication_quality(
-    query: &str,
+    _query: &str,
     publication: DeepResearchEvidenceFirstPublication,
     quality: DeepResearchPublicationQuality,
 ) -> Result<(), String> {
@@ -641,8 +625,7 @@ fn validate_deep_research_publication_quality(
         && quality.substantive_character_count == 0;
     match publication {
         DeepResearchEvidenceFirstPublication::Synthesized => {
-            let requirements =
-                deep_research_report_depth_requirements(query, quality.research_scope);
+            let requirements = deep_research_report_depth_requirements(quality.research_scope);
             if quality.direct_answer_count < requirements.minimum_direct_answers
                 || quality.finding_count < requirements.minimum_findings
                 || quality.accepted_claim_count < requirements.minimum_claims
@@ -695,17 +678,13 @@ fn sanitize_catalog_chunk(value: &str) -> Option<String> {
     text = strip_catalog_html_tags(&text);
     let lines = text
         .lines()
-        .map(strip_embedded_constructor_script_tail)
-        .map(strip_embedded_serialized_configuration_tail)
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|line| !line.is_empty() && !catalog_noise_line(line))
+        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
     let text = lines.join(" ");
     let text = text.trim();
-    (!text.is_empty()
-        && text.chars().count() <= SOURCE_CATALOG_MAX_CHUNK_CHARS
-        && !catalog_noise_payload(text))
-    .then(|| text.to_string())
+    (!text.is_empty() && text.chars().count() <= SOURCE_CATALOG_MAX_CHUNK_CHARS)
+        .then(|| text.to_string())
 }
 
 /// Keep visible Markdown labels while removing transport URLs and image
@@ -823,36 +802,6 @@ fn strip_catalog_html_tags(value: &str) -> String {
     pattern.replace_all(value, " ").into_owned()
 }
 
-fn strip_embedded_serialized_configuration_tail(value: &str) -> &str {
-    static SERIALIZED_CONFIGURATION: std::sync::OnceLock<regex::Regex> =
-        std::sync::OnceLock::new();
-    let pattern = SERIALIZED_CONFIGURATION.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?i)((?:^|[}\]]\s*,?\s*\{?\s*|[,;]\s*\{?\s*)(?:(?:"type"|\\\"type\\\")\s*:\s*(?:"keyvalue"|\\\"keyvalue\\\")|(?:"variables"|\\\"variables\\\")\s*:\s*\[))"#,
-        )
-        .expect("static serialized configuration regex")
-    });
-    pattern
-        .captures(value)
-        .and_then(|captures| captures.get(1))
-        .map_or(value, |payload| value[..payload.start()].trim_end())
-}
-
-fn strip_embedded_constructor_script_tail(value: &str) -> &str {
-    static EMBEDDED_CONSTRUCTOR_ASSIGNMENT: std::sync::OnceLock<regex::Regex> =
-        std::sync::OnceLock::new();
-    let pattern = EMBEDDED_CONSTRUCTOR_ASSIGNMENT.get_or_init(|| {
-        regex::Regex::new(
-            r"(?i)(?:^|[\s;])((?:(?:var|let|const)\s+)?[a-z_$][\w$\\]*\s*=\s*new\s+[a-z_$][\w$.]*\s*\()",
-        )
-        .expect("static embedded constructor assignment regex")
-    });
-    pattern
-        .captures(value)
-        .and_then(|captures| captures.get(1))
-        .map_or(value, |assignment| value[..assignment.start()].trim_end())
-}
-
 fn strip_html_element_blocks(value: &str, tag: &str) -> String {
     let mut output = value.to_string();
     let opening = format!("<{tag}");
@@ -872,133 +821,4 @@ fn strip_html_element_blocks(value: &str, tag: &str) -> String {
     output
 }
 
-fn catalog_noise_line(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    let known_chrome = [
-        "your current user-agent string appears to be from an automated process",
-        "doesn't work properly without javascript enabled",
-        "does not work properly without javascript enabled",
-        "please enable javascript to continue",
-        "toggle the table of contents",
-        "open main menu",
-        "__next_data__",
-        "webpack",
-        "document.cookie",
-        "globalthis.",
-        "process.env",
-        "window.onscroll",
-        "echo.init(",
-        "$(function",
-        "<%=",
-        "<%",
-        "%>",
-        "javascript:",
-        "onerror=",
-    ];
-    if known_chrome.iter().any(|marker| lower.contains(marker)) {
-        return true;
-    }
-    let trimmed = lower.trim_start_matches(['*', '-', ' ', '\t']);
-    let script_assignment = ["var ", "let ", "const ", "window.", "document."]
-        .iter()
-        .any(|prefix| trimmed.starts_with(prefix))
-        && trimmed.contains('=');
-    let script_function = (trimmed.starts_with("function ")
-        || trimmed.starts_with("$(\"")
-        || trimmed.starts_with("$('"))
-        && (trimmed.contains('{') || trimmed.contains(".click(") || trimmed.contains(".css("));
-    let jquery_script = lower.contains("$(")
-        && [".click(", ".on(", ".html(", ".attr(", ".siblings("]
-            .iter()
-            .any(|marker| lower.contains(marker));
-    let markdown_links = value.matches("](").count();
-    script_assignment
-        || script_function
-        || jquery_script
-        || markdown_links >= 7
-        || catalog_serialized_or_script_payload(value)
-}
-
-fn catalog_noise_payload(value: &str) -> bool {
-    value.matches("](").count() >= 7 || catalog_serialized_or_script_payload(value)
-}
-
-fn catalog_serialized_or_script_payload(value: &str) -> bool {
-    let character_count = value.chars().count();
-    if character_count < 80 {
-        return false;
-    }
-    let lower = value.to_ascii_lowercase();
-    let framework_markers = [
-        "self.__next_f.push",
-        "__next_data__",
-        "webpackchunk",
-        "hydrateroot(",
-        "application/ld+json",
-        "window.__",
-        "document.createelement(",
-        "addeventlistener(",
-        "\"type\":\"keyvalue\"",
-        "\\\"type\\\":\\\"keyvalue\\\"",
-        "\"variables\":[",
-        "\\\"variables\\\":[",
-    ];
-    if framework_markers
-        .iter()
-        .any(|marker| lower.contains(marker))
-    {
-        return true;
-    }
-
-    let escaped_quotes = value.matches("\\\"").count();
-    let escaped_controls = ["\\\\n", "\\\\r", "\\\\t", "\\\\u", "\\u"]
-        .iter()
-        .map(|marker| value.matches(marker).count())
-        .sum::<usize>();
-    let json_pairs = value.matches("\":").count() + value.matches("\\\":").count();
-    let structural_characters = value
-        .chars()
-        .filter(|character| matches!(character, '{' | '}' | '[' | ']' | ':' | ',' | ';' | '='))
-        .count();
-    let longest_token = value
-        .split_whitespace()
-        .map(|token| token.chars().count())
-        .max()
-        .unwrap_or_default();
-    let script_syntax_count = [
-        "=>",
-        "&&",
-        "||",
-        "function(",
-        "function ",
-        ".push(",
-        ".map(",
-    ]
-    .iter()
-    .map(|marker| lower.matches(marker).count())
-    .sum::<usize>();
-    let css_property_count = [
-        "background:",
-        "display:",
-        "float:",
-        "height:",
-        "margin-",
-        "padding-",
-        "position:",
-        "width:",
-    ]
-    .iter()
-    .map(|marker| lower.matches(marker).count())
-    .sum::<usize>();
-
-    (escaped_quotes >= 4 && (escaped_controls >= 2 || json_pairs >= 2))
-        || escaped_controls >= 5
-        || json_pairs >= 4
-        || (json_pairs >= 6 && structural_characters.saturating_mul(8) >= character_count)
-        || (longest_token >= 180 && structural_characters >= 12)
-        || (script_syntax_count >= 3 && structural_characters >= 8)
-        || (css_property_count >= 3 && value.contains('{') && value.contains('}'))
-}
-
-include!("source_backed/language.rs");
 include!("source_backed/artifact_validation.rs");

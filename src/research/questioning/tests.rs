@@ -161,49 +161,22 @@ mod tests {
             .contains("Write content and limitation in the query language"));
         assert!(params
             .prompt
-            .contains("Do not calculate or estimate intervals"));
+            .contains("Preserve the source's exact temporal, causal, comparative"));
         assert!(params
             .prompt
-            .contains("same release as its own announcement"));
+            .contains("Co-occurring observations do not establish an unstated relation"));
         assert!(params
             .prompt
-            .contains("dependency requirement does not establish incompatibility"));
+            .contains("Missing evidence establishes only the boundary"));
         assert!(params
             .prompt
-            .contains("discontinuation does not establish that no future fixes"));
+            .contains("A partial excerpt does not establish anything about omitted material"));
         assert!(params
             .prompt
-            .contains("one or a few named examples"));
+            .contains("Attributed evaluation remains attributed"));
         assert!(params
             .prompt
-            .contains("supports only that recommendation"));
-        assert!(params
-            .prompt
-            .contains("Source-authored praise such as great or excellent"));
-        assert!(params
-            .prompt
-            .contains("collective all, only, every, or none claim"));
-        assert!(params
-            .prompt
-            .contains("the whole report has no evidence"));
-        assert!(params
-            .prompt
-            .contains("does not document it, not that compatibility is impossible"));
-        assert!(params
-            .prompt
-            .contains("An `updated` timestamp is not a release or publication date"));
-        assert!(params
-            .prompt
-            .contains("A short or incomplete excerpt does not establish that omitted events"));
-        assert!(params
-            .prompt
-            .contains("never turn discontinued into no possible future fix"));
-        assert!(params
-            .prompt
-            .contains("never rewrite that pair as only/sole/incompatible"));
-        assert!(params
-            .prompt
-            .contains("keep each evidence gap scoped to its exact question"));
+            .contains("distinguish each normative recommendation from a sourced fact"));
         assert!(params.prompt.contains("\"evidence_ref\":\"E1\""));
         assert!(!params.prompt.contains("evidence:a"));
         assert!(!params.prompt.contains("follow_up"));

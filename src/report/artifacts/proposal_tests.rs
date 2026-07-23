@@ -2,6 +2,7 @@ use super::*;
 
 fn report_context(scope: DeepResearchReportScope) -> DeepResearchReportContext {
     DeepResearchReportContext {
+        report_title: "Research report".to_string(),
         scope,
         freshness_required: false,
         tracks: vec![serde_json::json!({
@@ -18,6 +19,25 @@ fn report_context(scope: DeepResearchReportScope) -> DeepResearchReportContext {
     }
 }
 
+fn report_proposal(mut value: serde_json::Value) -> serde_json::Value {
+    value
+        .as_object_mut()
+        .expect("report proposal fixture")
+        .insert(
+            "labels".to_string(),
+            serde_json::json!({
+                "answer": "Direct Answer",
+                "findings": "Findings",
+                "recommendations": "Evidence-Based Recommendations",
+                "boundary": "Evidence Boundary",
+                "limitations": "Limitations",
+                "evidence_boundary": "This report publishes no conclusion beyond the fetched evidence.",
+                "sources": "Sources"
+            }),
+        );
+    value
+}
+
 #[test]
 fn proposal_schema_keeps_model_output_block_only() {
     let schema = deep_research_report_proposal_schema();
@@ -29,9 +49,9 @@ fn proposal_schema_keeps_model_output_block_only() {
     assert!(encoded.contains("\"limitations\""));
     assert!(encoded.contains("\"source_aliases\""));
     assert!(encoded.contains("\"track_ids\""));
+    assert!(encoded.contains("\"labels\""));
     assert!(!encoded.contains("\"url\""));
     assert!(!encoded.contains("\"markdown\""));
-    assert!(!encoded.contains("\"sources\""));
 }
 
 #[test]
@@ -59,7 +79,7 @@ fn proposal_prompt_contains_semantic_scope_tracks_and_no_catalog_anchor() {
 #[test]
 fn host_builds_fixed_sections_citations_and_ledger_from_valid_blocks() {
     let catalog = focused_catalog();
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "Nimbus version 2 receives fixes through September 2027.",
             "source_aliases": ["source-1"],
@@ -72,7 +92,7 @@ fn host_builds_fixed_sections_citations_and_ledger_from_valid_blocks() {
         }],
         "recommendations": [],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal(
         "Which Nimbus release is supported?",
@@ -96,7 +116,7 @@ fn host_builds_fixed_sections_citations_and_ledger_from_valid_blocks() {
 #[test]
 fn invalid_blocks_are_removed_without_losing_valid_siblings() {
     let catalog = focused_catalog();
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "Nimbus version 2 receives fixes through September 2027.",
             "source_aliases": ["source-1"],
@@ -113,7 +133,7 @@ fn invalid_blocks_are_removed_without_losing_valid_siblings() {
         }],
         "recommendations": [],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal(
         "Which Nimbus release is supported?",
@@ -131,7 +151,7 @@ fn invalid_blocks_are_removed_without_losing_valid_siblings() {
 #[test]
 fn comprehensive_scope_rejects_a_shallow_single_fact_report() {
     let catalog = comprehensive_catalog();
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "The Aurora program entered public operation in July 2026.",
             "source_aliases": ["source-1"],
@@ -144,7 +164,7 @@ fn comprehensive_scope_rejects_a_shallow_single_fact_report() {
         }],
         "recommendations": [],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal_at(
         "Provide a complete assessment of the Aurora program",
@@ -161,7 +181,7 @@ fn comprehensive_scope_rejects_a_shallow_single_fact_report() {
 #[test]
 fn recommendation_padding_cannot_satisfy_comprehensive_depth() {
     let catalog = comprehensive_catalog();
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "The Aurora program entered public operation in July 2026.",
             "source_aliases": ["source-1"],
@@ -182,7 +202,7 @@ fn recommendation_padding_cannot_satisfy_comprehensive_depth() {
             "track_ids": ["request.primary"]
         }],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal_at(
         "Provide a complete assessment of the Aurora program",
@@ -214,7 +234,7 @@ fn web_source_without_semantic_provenance_cannot_pass_the_strong_support_gate() 
         omitted_source_count: 0,
         omitted_chunk_count: 0,
     };
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "Nimbus version 2 receives fixes through September 2027.",
             "source_aliases": ["source-1"],
@@ -227,7 +247,7 @@ fn web_source_without_semantic_provenance_cannot_pass_the_strong_support_gate() 
         }],
         "recommendations": [],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal(
         "Which Nimbus release is supported?",
@@ -243,7 +263,7 @@ fn web_source_without_semantic_provenance_cannot_pass_the_strong_support_gate() 
 fn semantic_admission_is_not_replaced_by_a_publisher_allowlist() {
     let mut catalog = focused_catalog();
     catalog.sources[0].anchor = "https://research.example/nimbus".to_string();
-    let proposal = serde_json::json!({
+    let proposal = report_proposal(serde_json::json!({
         "summary": [{
             "text": "Nimbus version 2 receives fixes through September 2027.",
             "source_aliases": ["source-1"],
@@ -256,7 +276,7 @@ fn semantic_admission_is_not_replaced_by_a_publisher_allowlist() {
         }],
         "recommendations": [],
         "limitations": []
-    });
+    }));
 
     let admitted = admit_deep_research_report_proposal(
         "Which Nimbus release is supported?",
@@ -274,6 +294,7 @@ fn semantic_admission_is_not_replaced_by_a_publisher_allowlist() {
 #[test]
 fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
     let context = DeepResearchReportContext {
+        report_title: "Research report".to_string(),
         scope: DeepResearchReportScope::Comprehensive,
         freshness_required: false,
         tracks: vec![
@@ -372,6 +393,95 @@ fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
             },
         ],
     ));
+}
+
+#[test]
+fn report_admission_is_isomorphic_across_unrelated_content() {
+    fn admit(
+        title: &str,
+        source_text: &str,
+        summary: &str,
+        finding: &str,
+        labels: serde_json::Value,
+    ) -> AdmittedDeepResearchReport {
+        let catalog = DeepResearchSourceCatalog {
+            sources: vec![DeepResearchCatalogSource {
+                alias: "source-1".to_string(),
+                title: title.to_string(),
+                anchor: "https://example.test/record".to_string(),
+                chunks: vec![source_text.to_string()],
+                claim_eligible: true,
+                semantically_admitted: true,
+                coverage: Vec::new(),
+            }],
+            omitted_source_count: 0,
+            omitted_chunk_count: 0,
+        };
+        let mut proposal = serde_json::json!({
+            "summary": [{
+                "text": summary,
+                "source_aliases": ["source-1"],
+                "track_ids": ["request.primary"]
+            }],
+            "findings": [{
+                "text": finding,
+                "source_aliases": ["source-1"],
+                "track_ids": ["request.primary"]
+            }],
+            "recommendations": [],
+            "limitations": []
+        });
+        proposal["labels"] = labels;
+        admit_deep_research_report_proposal("untrusted query", &catalog, proposal)
+            .expect("structural admission")
+            .expect("isomorphic focused report")
+    }
+
+    let first = admit(
+        "Material record",
+        "The retained record establishes the observed material state. The same record describes its bounded implication.",
+        "The retained record establishes the observed material state.",
+        "The same record describes its bounded implication.",
+        serde_json::json!({
+            "answer": "Answer",
+            "findings": "Findings",
+            "recommendations": "Recommendations",
+            "boundary": "Boundary",
+            "limitations": "Limitations",
+            "evidence_boundary": "No conclusion is published beyond the fetched evidence.",
+            "sources": "Sources"
+        }),
+    );
+    let second = admit(
+        "观察记录",
+        "保留的记录明确说明了已观察状态。同一记录也说明了它的有限影响。",
+        "保留的记录明确说明了已观察状态。",
+        "同一记录也说明了它的有限影响。",
+        serde_json::json!({
+            "answer": "回答",
+            "findings": "发现",
+            "recommendations": "建议",
+            "boundary": "边界",
+            "limitations": "限制",
+            "evidence_boundary": "报告不会发布超出已获取证据的结论。",
+            "sources": "来源"
+        }),
+    );
+
+    assert_eq!(
+        (
+            first.direct_answer_block_count,
+            first.finding_block_count,
+            first.accepted_claim_count,
+            first.cited_source_count,
+        ),
+        (
+            second.direct_answer_block_count,
+            second.finding_block_count,
+            second.accepted_claim_count,
+            second.cited_source_count,
+        )
+    );
 }
 
 fn focused_catalog() -> DeepResearchSourceCatalog {

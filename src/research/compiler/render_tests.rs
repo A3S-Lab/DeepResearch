@@ -108,7 +108,7 @@ fn f01_renders_typed_contradiction_without_internal_claim_ids() {
 }
 
 #[test]
-fn f04_uses_chinese_host_labels_in_both_artifacts() {
+fn f04_uses_authored_reader_labels_in_both_artifacts() {
     let replay = replay("F04");
     let document = claim_document(&replay);
 
@@ -120,6 +120,21 @@ fn f04_uses_chinese_host_labels_in_both_artifacts() {
     assert!(rendered.html.contains("<html lang=\"zh\">"));
     assert!(rendered.html.contains("直接结论"));
     assert!(!rendered.html.contains("Direct Answer"));
+}
+
+#[test]
+fn reader_labels_are_not_inferred_from_the_language_code() {
+    let replay = replay("F01");
+    let mut document = claim_document(&replay);
+    document.language = "en".to_string();
+    document.reader_labels = super::test_support::reader_labels("zh");
+
+    let rendered = render_report_document(&document);
+
+    assert!(rendered.markdown.contains("## 直接结论"));
+    assert!(rendered.html.contains("<html lang=\"en\">"));
+    assert!(rendered.html.contains("跳转到报告"));
+    assert!(!rendered.html.contains("Skip to report"));
 }
 
 #[test]

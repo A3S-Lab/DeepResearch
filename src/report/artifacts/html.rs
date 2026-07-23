@@ -12,7 +12,11 @@ use composition::compose_report_fragment;
 use style::REPORT_CSS;
 
 pub(super) fn deep_research_completed_report_html(query: &str, markdown: &str) -> String {
-    deep_research_completed_report_html_with_presentation(query, markdown, None, None)
+    deep_research_report_html_with_state(query, markdown, None, None, ReportRenderState::Complete)
+}
+
+pub(super) fn deep_research_degraded_report_html(query: &str, markdown: &str) -> String {
+    deep_research_report_html_with_state(query, markdown, None, None, ReportRenderState::Degraded)
 }
 
 pub(super) fn deep_research_completed_report_html_with_presentation(
@@ -21,27 +25,39 @@ pub(super) fn deep_research_completed_report_html_with_presentation(
     presentation: Option<&ReportPresentation>,
     authored_thesis: Option<&str>,
 ) -> String {
-    let lower_markdown = markdown.to_ascii_lowercase();
-    let recovery = lower_markdown.contains("# deepresearch recovery report");
-    let source_backed = markdown.contains("这是可核查的来源证据视图")
-        || markdown.contains("This is a verifiable source-evidence view");
-    let no_evidence = markdown.contains("本次检索没有获得可安全发布的来源文字")
-        || markdown.contains("This retrieval obtained no source text that can be published safely");
-    let degraded = recovery || source_backed || no_evidence;
+    deep_research_report_html_with_state(
+        query,
+        markdown,
+        presentation,
+        authored_thesis,
+        ReportRenderState::Complete,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReportRenderState {
+    Complete,
+    Degraded,
+}
+
+fn deep_research_report_html_with_state(
+    query: &str,
+    markdown: &str,
+    presentation: Option<&ReportPresentation>,
+    authored_thesis: Option<&str>,
+    render_state: ReportRenderState,
+) -> String {
+    let degraded = render_state == ReportRenderState::Degraded;
     let title = concise_report_title(&deep_research_markdown_report_title(markdown, query));
-    let labels = report_labels(query, degraded);
+    let labels = report_labels(degraded);
     let language = labels.language;
-    let raw_body = mark_ineligible_source_evidence(&strip_first_h1(
-        &deep_research_markdown_to_html_fragment(markdown),
-    ));
+    let raw_body = strip_first_h1(&deep_research_markdown_to_html_fragment(markdown));
     let source_count = unique_external_source_count(&raw_body);
     let section_plan = presentation
         .map(|presentation| presentation.section_plan.as_slice())
         .unwrap_or_default();
     let composition = compose_report_fragment(&raw_body, section_plan);
-    let finding_count = composition
-        .finding_count
-        .max(markdown_declared_finding_count(markdown));
+    let finding_count = composition.finding_count;
     let (content_count, content_label) = if finding_count > 0 {
         (finding_count, labels.findings)
     } else {
@@ -114,113 +130,46 @@ struct ReportLabels {
     table_scroll_hint: &'static str,
 }
 
-fn report_labels(query: &str, degraded: bool) -> ReportLabels {
-    if query.chars().any(is_han_character) {
-        ReportLabels {
-            language: "zh-CN",
-            brief: if degraded {
-                "A3S 深度研究 · 已降级"
-            } else {
-                "A3S 深度研究"
-            },
-            evidence: if degraded {
-                "证据不足 · 已降级"
-            } else {
-                "证据可追溯"
-            },
-            sources: "引用来源",
-            confidence: if degraded {
-                "非最终领域结论"
-            } else {
-                "已说明置信度与限制"
-            },
-            reading: "研究报告",
-            metadata: "报告元数据",
-            profile: "证据概况",
-            findings: "关键发现",
-            sections: "报告章节",
-            reading_time: "分钟阅读",
-            fallback_thesis: if degraded {
-                "本次运行未达到证据门槛；页面仅保留可追溯来源、失败边界与后续行动。"
-            } else {
-                "一份区分结论、证据强度与未决限制的可追溯研究报告。"
-            },
-            table_scroll_hint: "← 横向滑动查看全部列 →",
-        }
-    } else {
-        ReportLabels {
-            language: "en",
-            brief: if degraded {
-                "A3S Deep Research · Degraded"
-            } else {
-                "A3S Deep Research"
-            },
-            evidence: if degraded {
-                "Insufficient evidence · Degraded"
-            } else {
-                "Traceable evidence"
-            },
-            sources: "Cited sources",
-            confidence: if degraded {
-                "Not a final domain conclusion"
-            } else {
-                "Confidence & limits stated"
-            },
-            reading: "Research report",
-            metadata: "Report metadata",
-            profile: "Evidence profile",
-            findings: "Key findings",
-            sections: "Report sections",
-            reading_time: "Min read",
-            fallback_thesis: if degraded {
-                "This run did not meet the evidence gate; the page preserves only traceable sources, failure limits, and next actions."
-            } else {
-                "A source-backed reading experience separating conclusions, evidence strength, and unresolved limits."
-            },
-            table_scroll_hint: "← swipe to inspect all columns →",
-        }
+fn report_labels(degraded: bool) -> ReportLabels {
+    ReportLabels {
+        language: "en",
+        brief: if degraded {
+            "A3S Deep Research · Degraded"
+        } else {
+            "A3S Deep Research"
+        },
+        evidence: if degraded {
+            "Insufficient evidence · Degraded"
+        } else {
+            "Traceable evidence"
+        },
+        sources: "Cited sources",
+        confidence: if degraded {
+            "Not a final domain conclusion"
+        } else {
+            "Confidence & limits stated"
+        },
+        reading: "Research report",
+        metadata: "Report metadata",
+        profile: "Evidence profile",
+        findings: "Key findings",
+        sections: "Report sections",
+        reading_time: "Min read",
+        fallback_thesis: if degraded {
+            "This run did not meet the evidence gate; the page preserves only traceable sources, failure limits, and next actions."
+        } else {
+            "A source-backed reading experience separating conclusions, evidence strength, and unresolved limits."
+        },
+        table_scroll_hint: "← swipe to inspect all columns →",
     }
-}
-
-fn is_han_character(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2FA1F
-    )
 }
 
 fn report_content_section_count(markdown: &str) -> usize {
     markdown
         .lines()
         .filter_map(|line| line.strip_prefix("## ").map(str::trim))
-        .filter(|heading| {
-            !heading.eq_ignore_ascii_case("sources")
-                && !heading.eq_ignore_ascii_case("source ledger")
-                && !matches!(*heading, "来源" | "参考来源")
-        })
         .count()
         .max(1)
-}
-
-fn markdown_declared_finding_count(markdown: &str) -> usize {
-    let mut in_findings = false;
-    let mut count = 0usize;
-    for line in markdown.lines().map(str::trim) {
-        if let Some(heading) = line.strip_prefix("## ").map(str::trim) {
-            in_findings = matches!(
-                heading.to_ascii_lowercase().as_str(),
-                "findings" | "key findings"
-            ) || matches!(heading, "研究发现" | "核心发现" | "关键发现");
-            continue;
-        }
-        if !in_findings {
-            continue;
-        }
-        if line.starts_with("### ") || line.starts_with("- ") || line.starts_with("* ") {
-            count = count.saturating_add(1);
-        }
-    }
-    count
 }
 
 fn estimated_reading_minutes(fragment: &str) -> usize {
@@ -237,15 +186,12 @@ fn estimated_reading_minutes(fragment: &str) -> usize {
             _ => {}
         }
     }
-    let han_count = visible
+    visible
         .chars()
-        .filter(|character| is_han_character(*character))
-        .count();
-    let word_count = visible
-        .split_whitespace()
-        .filter(|word| word.chars().any(char::is_alphanumeric))
-        .count();
-    han_count.div_ceil(500).max(word_count.div_ceil(220)).max(1)
+        .filter(|character| !character.is_whitespace() && !character.is_control())
+        .count()
+        .div_ceil(500)
+        .max(1)
 }
 
 fn unique_external_source_count(fragment: &str) -> usize {
@@ -293,24 +239,6 @@ fn strip_first_h1(fragment: &str) -> String {
     };
     let end = start + relative_end + "</h1>".len();
     format!("{}{}", &fragment[..start], &fragment[end..])
-}
-
-fn mark_ineligible_source_evidence(fragment: &str) -> String {
-    [
-        "<blockquote>\n<p><strong>证据资格：不可用于结论</strong>",
-        "<blockquote>\n<p><strong>Claim eligibility: not eligible for conclusions</strong>",
-    ]
-    .into_iter()
-    .fold(fragment.to_string(), |html, marker| {
-        html.replace(
-            marker,
-            &marker.replacen(
-                "<blockquote>",
-                "<blockquote class=\"report-evidence-ineligible\">",
-                1,
-            ),
-        )
-    })
 }
 
 fn deep_research_markdown_report_title(markdown: &str, query: &str) -> String {

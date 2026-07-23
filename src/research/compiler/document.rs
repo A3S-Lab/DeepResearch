@@ -27,6 +27,7 @@ pub(super) struct ReportDocument {
     pub(super) kind: ReportDocumentKind,
     pub(super) title: String,
     pub(super) language: String,
+    pub(super) reader_labels: super::ReaderLabels,
     pub(super) direct_answer_claims: Vec<ReportClaim>,
     pub(super) dimensions: Vec<ReportDimension>,
     pub(super) source_ledger: Vec<ReportSource>,
@@ -140,17 +141,11 @@ pub(super) fn report_structural_outcome(document: &ReportDocument) -> Structural
 }
 
 pub(super) fn build_no_evidence_document(contract: &ResearchContract) -> ReportDocument {
-    let chinese = contract.spec.language.eq_ignore_ascii_case("zh")
-        || contract.spec.language.starts_with("zh-");
-    let gap_text = if chinese {
-        "本次运行未能获取可核查的来源，因此无法为该维度给出有证据支持的结论。"
-    } else {
-        "This run acquired no verifiable source, so no evidence-backed conclusion is available for this dimension."
-    };
     ReportDocument {
         kind: ReportDocumentKind::NoEvidence,
         title: contract.spec.query.clone(),
         language: contract.spec.language.clone(),
+        reader_labels: contract.spec.reader_labels.clone(),
         direct_answer_claims: Vec::new(),
         dimensions: contract
             .spec
@@ -165,7 +160,7 @@ pub(super) fn build_no_evidence_document(contract: &ResearchContract) -> ReportD
                 relations: Vec::new(),
                 gaps: vec![ReportGap {
                     id: deterministic_document_id("no-evidence-gap", &dimension.id),
-                    text: gap_text.to_string(),
+                    text: contract.spec.reader_labels.no_evidence_gap.clone(),
                     attempted_query_ids: contract
                         .plan
                         .queries
@@ -293,6 +288,7 @@ pub(super) fn build_report_document(
         kind: ReportDocumentKind::Claims,
         title: contract.spec.query.clone(),
         language: contract.spec.language.clone(),
+        reader_labels: contract.spec.reader_labels.clone(),
         direct_answer_claims,
         dimensions,
         source_ledger,
@@ -341,8 +337,7 @@ pub(super) fn build_source_backed_document(
             let gap = planning_gap.map_or_else(
                 || ReportGap {
                     id: deterministic_document_id("source-backed-gap", &dimension.id),
-                    text: "A verified answer is not available for this dimension. The retained source excerpts are provided without additional interpretation."
-                        .to_string(),
+                    text: contract.spec.reader_labels.source_backed_gap.clone(),
                     attempted_query_ids: contract
                         .plan
                         .queries
@@ -358,13 +353,11 @@ pub(super) fn build_source_backed_document(
                         .iter()
                         .filter(|target_id| {
                             !source_ids.iter().any(|source_id| {
-                                sources_by_id
-                                    .get(source_id.as_str())
-                                    .is_some_and(|source| {
-                                        source.provenance.iter().any(|edge| {
-                                            edge.source_target_id.as_str() == target_id.as_str()
-                                        })
+                                sources_by_id.get(source_id.as_str()).is_some_and(|source| {
+                                    source.provenance.iter().any(|edge| {
+                                        edge.source_target_id.as_str() == target_id.as_str()
                                     })
+                                })
                             })
                         })
                         .cloned()
@@ -396,6 +389,7 @@ pub(super) fn build_source_backed_document(
         kind: ReportDocumentKind::SourceBacked,
         title: contract.spec.query.clone(),
         language: contract.spec.language.clone(),
+        reader_labels: contract.spec.reader_labels.clone(),
         direct_answer_claims: vec![],
         dimensions,
         source_ledger,

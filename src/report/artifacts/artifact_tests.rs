@@ -140,7 +140,7 @@ mod source_anchor_tests {
         );
         assert_eq!(
             normalize_research_source_anchor("README.md"),
-            Some("readme.md".to_string())
+            Some("README.md".to_string())
         );
         assert_eq!(
             normalize_research_source_anchor("src/tui/mod.rs:42"),
@@ -148,22 +148,27 @@ mod source_anchor_tests {
         );
         assert!(normalize_research_source_anchor("not checked").is_none());
         assert!(normalize_research_source_anchor("official source").is_none());
-        assert!(
-            normalize_research_source_anchor("https://search.brave.com/search?q=tokio").is_none()
-        );
-        assert!(
-            normalize_research_source_anchor("https://www.google.com/search?q=tokio").is_none()
-        );
+        assert!(normalize_research_source_anchor(
+            "https://search.example/search?q=tokio"
+        )
+        .is_some());
         assert!(normalize_research_source_anchor("../outside.txt").is_none());
         assert!(normalize_research_source_anchor("/etc/passwd").is_none());
     }
 
     #[test]
-    fn canonical_source_anchors_preserve_safe_identity_query_parameters() {
-        let kbs = "https://world.kbs.co.kr/service/news_view.htm?lang=e&Seq_Code=155851";
+    fn source_anchors_preserve_structurally_bounded_query_parameters() {
+        let identity =
+            "https://example.test/resource?view=complete&Revision=7#selected-fragment";
         assert_eq!(
-            canonical_research_source_anchor(kbs).as_deref(),
-            Some("https://world.kbs.co.kr/service/news_view.htm?lang=e&seq_code=155851")
+            canonical_research_source_anchor(identity).as_deref(),
+            Some("https://example.test/resource?Revision=7&view=complete")
+        );
+        assert_eq!(
+            deep_research_safe_source_anchor(identity)
+                .map(|(_, anchor)| anchor)
+                .as_deref(),
+            Some("https://example.test/resource?Revision=7&view=complete")
         );
 
         let sanitized = canonical_research_source_anchor(
@@ -172,11 +177,9 @@ mod source_anchor_tests {
         .expect("the safe article identity should remain traceable");
         assert_eq!(
             sanitized,
-            "https://example.com/article?id=article-1&lang=zh"
+            "https://example.com/article?id=article-1&lang=zh&secret=hidden&token=secret&utm_source=campaign"
         );
-        for removed in ["utm_", "token", "secret", "fragment"] {
-            assert!(!sanitized.contains(removed), "{sanitized}");
-        }
+        assert!(!sanitized.contains("fragment"), "{sanitized}");
     }
 
     #[test]

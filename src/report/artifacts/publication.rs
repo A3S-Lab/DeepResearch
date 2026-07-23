@@ -317,7 +317,7 @@ pub fn materialize_deep_research_recovery_report(
          - Use this run artifact at `.a3s/research/{slug}/report.md` as the local record of \
          why the original run could not produce a fully source-backed answer.\n"
     );
-    let html = deep_research_completed_report_html(query, &markdown);
+    let html = deep_research_degraded_report_html(query, &markdown);
     write_research_report_pair(
         &report_dir.join("report.md"),
         markdown,
@@ -508,7 +508,7 @@ fn deep_research_recovery_result_text(answer_text: &str, workflow_output: &str) 
         && !is_deep_research_model_failure_text(answer)
         && !deep_research_output_has_internal_leak(answer)
     {
-        return truncate_recovery_text(&deep_research_sanitize_evidence_text(answer), 20_000);
+        return truncate_recovery_text(&deep_research_sanitize_recovery_text(answer), 20_000);
     }
 
     workflow_evidence_summary(workflow_output).unwrap_or_else(|| {

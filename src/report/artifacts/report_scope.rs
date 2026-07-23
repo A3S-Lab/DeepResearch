@@ -1,8 +1,7 @@
 const COMPREHENSIVE_REPORT_MIN_FINDINGS: usize = 4;
 const COMPREHENSIVE_REPORT_MIN_CLAIMS: usize = 5;
 const COMPREHENSIVE_REPORT_MIN_CITED_SOURCES: usize = 2;
-const COMPREHENSIVE_REPORT_MIN_HAN_CHARACTERS: usize = 480;
-const COMPREHENSIVE_REPORT_MIN_NON_HAN_CHARACTERS: usize = 1_000;
+const COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS: usize = 480;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeepResearchReportScope {
@@ -22,6 +21,7 @@ impl DeepResearchReportScope {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeepResearchReportContext {
+    pub report_title: String,
     pub scope: DeepResearchReportScope,
     pub freshness_required: bool,
     pub tracks: Vec<serde_json::Value>,
@@ -49,6 +49,13 @@ pub fn deep_research_report_context_from_plan(
         .ok_or_else(|| {
             "DeepResearch report plan omitted boolean `freshness_required`".to_string()
         })?;
+    let report_title = plan
+        .get("report_title")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| "DeepResearch report plan omitted `report_title`".to_string())?
+        .to_string();
     let raw_tracks = plan
         .get("tracks")
         .and_then(serde_json::Value::as_array)
@@ -128,6 +135,7 @@ pub fn deep_research_report_context_from_plan(
         }));
     }
     Ok(DeepResearchReportContext {
+        report_title,
         scope,
         freshness_required,
         tracks,
@@ -137,6 +145,7 @@ pub fn deep_research_report_context_from_plan(
 #[doc(hidden)]
 fn focused_report_context() -> DeepResearchReportContext {
     DeepResearchReportContext {
+        report_title: "Research report".to_string(),
         scope: DeepResearchReportScope::Focused,
         freshness_required: false,
         tracks: vec![serde_json::json!({
@@ -163,7 +172,6 @@ struct DeepResearchReportDepthRequirements {
 }
 
 fn deep_research_report_depth_requirements(
-    query: &str,
     scope: DeepResearchReportScope,
 ) -> DeepResearchReportDepthRequirements {
     match scope {
@@ -172,14 +180,7 @@ fn deep_research_report_depth_requirements(
             minimum_findings: COMPREHENSIVE_REPORT_MIN_FINDINGS,
             minimum_claims: COMPREHENSIVE_REPORT_MIN_CLAIMS,
             minimum_cited_sources: COMPREHENSIVE_REPORT_MIN_CITED_SOURCES,
-            minimum_substantive_characters: if query
-                .chars()
-                .any(source_backed_han_character)
-            {
-                COMPREHENSIVE_REPORT_MIN_HAN_CHARACTERS
-            } else {
-                COMPREHENSIVE_REPORT_MIN_NON_HAN_CHARACTERS
-            },
+            minimum_substantive_characters: COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS,
         },
         DeepResearchReportScope::Focused => DeepResearchReportDepthRequirements {
             minimum_direct_answers: 1,
@@ -195,78 +196,4 @@ fn report_substantive_character_count(text: &str) -> usize {
     text.chars()
         .filter(|character| !character.is_whitespace() && !character.is_control())
         .count()
-}
-
-fn report_comprehensive_blocks_are_distinct(
-    summary: &[AdmittedReportBlock],
-    findings: &[AdmittedReportBlock],
-) -> bool {
-    let mut retained = summary
-        .iter()
-        .map(|block| block.text.as_str())
-        .collect::<Vec<_>>();
-    for finding in findings {
-        if retained
-            .iter()
-            .any(|text| report_blocks_are_near_duplicates(text, &finding.text))
-        {
-            return false;
-        }
-        retained.push(&finding.text);
-    }
-    true
-}
-
-fn report_blocks_are_near_duplicates(left: &str, right: &str) -> bool {
-    let normalize = |text: &str| {
-        text.chars()
-            .filter(|character| character.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<Vec<_>>()
-    };
-    let left = normalize(left);
-    let right = normalize(right);
-    if left == right {
-        return true;
-    }
-    if left.len().min(right.len()) < 24 {
-        return false;
-    }
-    let trigrams = |characters: &[char]| {
-        characters
-            .windows(3)
-            .map(|window| window.iter().collect::<String>())
-            .collect::<HashSet<_>>()
-    };
-    let left = trigrams(&left);
-    let right = trigrams(&right);
-    let smaller = left.len().min(right.len());
-    let overlap = left.intersection(&right).count();
-    overlap.saturating_mul(100) >= smaller.saturating_mul(80)
-}
-
-fn report_source_current_claim_eligible(
-    freshness_required: bool,
-    current_date: chrono::NaiveDate,
-    catalog: &DeepResearchSourceCatalog,
-    source: &DeepResearchCatalogSource,
-) -> bool {
-    if !freshness_required || !catalog_source_is_temporal_snapshot(source) {
-        return true;
-    }
-    let Some(source_date) = catalog_source_latest_observed_date(source) else {
-        return false;
-    };
-    let freshest_observed = catalog
-        .sources
-        .iter()
-        .filter(|candidate| candidate.claim_eligible)
-        .filter_map(catalog_source_latest_observed_date)
-        .filter(|date| *date <= current_date + chrono::Duration::days(1))
-        .max()
-        .unwrap_or(current_date);
-    freshest_observed
-        .signed_duration_since(source_date)
-        .num_days()
-        <= 7
 }

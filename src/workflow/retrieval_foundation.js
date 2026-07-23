@@ -145,37 +145,10 @@ async function run(ctx, inputs) {
     }
     return parsed.authority.replace(/:\d+$/, "");
   };
-  const lowValueUrl = (value) => {
-    const url = String(value || "").toLowerCase();
-    return /\.(?:7z|aac|apk|avi|avif|bin|bmp|bz2|deb|dmg|eot|exe|flac|gif|gz|ico|iso|jpe?g|m4a|mov|mp3|mp4|mpeg|msi|ogg|opus|otf|pkg|png|rar|rpm|svg|tar|tiff?|tgz|ttf|wasm|wav|webm|webp|woff2?|xz|zip)(?:[?#].*)?$/i.test(url) ||
-      /^https?:\/\/avatars\.githubusercontent\.com(?:\/|$)/.test(url) ||
-      /^https?:\/\/(?:[^/]+\.)?gravatar\.com(?:\/|$)/.test(url);
-  };
-  const fetchUrl = (value) => {
-    const url = cleanUrl(value);
-    let match = url.match(
-      /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/blob\/([^/?#]+)\/(.+?)(?:[?#].*)?$/i
-    );
-    if (match) {
-      return `https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}/${match[4]}`;
-    }
-    match = url.match(
-      /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/releases\/?(?:[?#].*)?$/i
-    );
-    if (match) {
-      return `https://github.com/${match[1]}/${match[2]}/releases.atom`;
-    }
-    match = url.match(
-      /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/?(?:[?#].*)?$/i
-    );
-    if (match) {
-      return `https://raw.githubusercontent.com/${match[1]}/${match[2]}/HEAD/README.md`;
-    }
-    match = url.match(
-      /^https:\/\/(?:www\.|export\.)?arxiv\.org\/abs\/((?:[a-z-]+(?:\.[a-z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?)(?:[?#].*)?$/i
-    );
-    return match ? `https://arxiv.org/pdf/${match[1]}` : url;
-  };
+  // Fetch the exact closed-catalog URL. Provider- or topic-specific URL
+  // rewriting would make transport routing depend on host/path vocabulary and
+  // can silently replace the artifact selected by the semantic contract.
+  const fetchUrl = (value) => cleanUrl(value);
 
   const batchSections = (output, expectedCount) => {
     const text = String(output || "");
@@ -306,11 +279,11 @@ async function run(ctx, inputs) {
           engines: uniqueStrings(Array.isArray(item.engines) ? item.engines : [])
             .slice(0, 4),
         }))
-        .filter((item) => item.url && !lowValueUrl(item.url));
+        .filter((item) => item.url);
     } catch (_error) {
       return uniqueStrings(text.match(/https?:\/\/[^\s<>"']+/g) || [])
         .map(cleanUrl)
-        .filter((url) => url && !lowValueUrl(url))
+        .filter(Boolean)
         .map((url) => ({ title: "", url, date: "", engines: [] }));
     }
   };
@@ -348,79 +321,20 @@ async function run(ctx, inputs) {
     return kind === "pdf" || kind === "document" ||
       /^application\/pdf(?:;|$)/.test(contentType);
   };
-  const stripEmbeddedConstructorScriptTail = (value) => {
-    const line = String(value || "");
-    const match = /(?:^|[\s;])((?:(?:var|let|const)\s+)?[a-z_$][\w$\\]*\s*=\s*new\s+[a-z_$][\w$.]*\s*\()/i.exec(line);
-    if (!match) return line;
-    const assignmentOffset = match.index + match[0].indexOf(match[1]);
-    return line.slice(0, assignmentOffset).trimEnd();
-  };
-  const stripEmbeddedSerializedConfigurationTail = (value) => {
-    const line = String(value || "");
-    const match = /((?:\\?"type\\?"\s*:\s*\\?"keyValue\\?"|\\?"variables\\?"\s*:\s*\[))/i.exec(line);
-    if (!match) return line;
-    let payloadOffset = match.index;
-    while (
-      payloadOffset > 0 &&
-      /[\s{}\[\],;]/.test(line[payloadOffset - 1])
-    ) {
-      payloadOffset -= 1;
-    }
-    return line.slice(0, payloadOffset).trimEnd();
-  };
-  const fetchedNoiseLine = (value) => {
-    const line = String(value || "").replace(/\s+/g, " ").trim();
-    const lower = line.toLowerCase();
-    if (!line) return true;
-    if (
-      /your current user-agent string appears to be from an automated process/i.test(line) ||
-      /does(?:n't| not) work properly without javascript enabled/i.test(line) ||
-      /please enable javascript (?:to continue|and reload)/i.test(line) ||
-      /toggle the table of contents\s+\d+\s+languages/i.test(line) ||
-      /open main menu/i.test(line) ||
-      /__next_data__|webpack|document\.cookie|meeportal\.g_userfeatures|globalthis\.|process\.env|window\.onscroll|echo\.init\(|\$\(function/i.test(line) ||
-      /"@context"\s*:\s*"https?:\\?\/\\?\/schema\.org/i.test(line)
-    ) {
-      return true;
-    }
-    const scriptAssignment = /^(?:var|let|const)\s+[a-z_$][\w$]*\s*=|^(?:window|document)\.|^function\s+[a-z_$]|^\$\(["']/i
-      .test(line);
-    const markdownLinkCount = (line.match(/\]\([^)]{1,500}\)/g) || []).length;
-    const navigationList = markdownLinkCount >= 12 ||
-      (markdownLinkCount >= 7 && /^\s*(?:[*+-]\s*)?\[/.test(line));
-    const punctuation = Array.from(line)
-      .filter((character) => /[{}\[\];=]/.test(character)).length;
-    const codeLike = line.length >= 160 && punctuation / line.length > 0.16 &&
-      !/[.!?。！？]\s*$/.test(line);
-    const jsonPairCount = (line.match(/"\s*:/g) || []).length;
-    const escapedQuoteCount = (line.match(/\\"/g) || []).length;
-    const serializedConfiguration = line.length >= 120 &&
-      (jsonPairCount >= 6 || escapedQuoteCount >= 8) &&
-      punctuation / line.length > 0.04;
-    return scriptAssignment || navigationList || codeLike || serializedConfiguration ||
-      lower === "javascript is disabled";
-  };
   const cleanFetchedText = (value, document) => {
-    let text = String(value || "")
+    const text = String(value || "")
       .replace(/\r\n?/g, "\n")
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "\n")
       .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "\n")
       .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "\n")
       .replace(/\n*\.\.\. \(more fetched content available; continue with offset=\d+\)\s*/gi, "\n");
-    if (document) {
-      text = text.replace(/([A-Za-z])-\s*\n\s*(?=[a-z])/g, "$1");
-    }
     const seen = new Set();
     return text
       .split(/\n+/)
-      .map(stripEmbeddedConstructorScriptTail)
-      .map(stripEmbeddedSerializedConfigurationTail)
       .map((line) => line.replace(/\s+/g, " ").trim())
       .filter((line) => {
-        if (fetchedNoiseLine(line)) return false;
-        const key = line.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
+        if (!line || seen.has(line)) return false;
+        seen.add(line);
         return true;
       })
       .join("\n")
@@ -450,16 +364,8 @@ async function run(ctx, inputs) {
 
   const evidenceLines = (value) => String(value || "")
     .split(/\n+/)
-    .map(stripEmbeddedConstructorScriptTail)
-    .map(stripEmbeddedSerializedConfigurationTail)
     .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter((line) => {
-      if (Array.from(line).length < 12) {
-        return false;
-      }
-      return !fetchedNoiseLine(line) &&
-        !/<script|<\/script|data-color-mode|--color-[a-z-]+\s*:/i.test(line);
-    });
+    .filter((line) => Array.from(line).length >= 12);
   const splitLongText = (value) => {
     const characters = Array.from(String(value || ""));
     if (characters.length <= MAX_CHUNK_CHARS) {
@@ -521,12 +427,12 @@ async function run(ctx, inputs) {
     }
     return chunks;
   };
-  const atomFeedSegments = (values, fetchedUrl) => {
+  const structuredFeedSegments = (values) => {
     const segments = Array.isArray(values) ? values : [values];
-    if (!/\/releases\.atom(?:[?#].*)?$/i.test(String(fetchedUrl || ""))) {
+    const text = segments.map((value) => String(value || "")).join("\n");
+    if (!/<feed(?:\s|>)/i.test(text) || !/<entry(?:\s|>)/i.test(text)) {
       return segments;
     }
-    const text = segments.map((value) => String(value || "")).join("\n");
     const starts = [];
     const entryPattern = /<entry(?:\s|>)/gi;
     let match = null;
@@ -590,7 +496,7 @@ async function run(ctx, inputs) {
       .map((item, index) => {
         const sourceId = `${prefix}-${index + 1}`;
         const chunks = sourceChunks(
-          atomFeedSegments(item.segments || [item.text], item.fetch_url),
+          structuredFeedSegments(item.segments || [item.text]),
           sourceId
         );
         if (chunks.length === 0) {

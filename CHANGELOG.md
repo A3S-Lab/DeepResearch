@@ -5,6 +5,29 @@ All notable changes to A3S DeepResearch are documented in this file.
 The project follows Semantic Versioning while the public API remains in the
 `0.x` development series.
 
+## [0.1.1] - 2026-07-23
+
+### Changed
+
+- Treat raw web and workspace acquisition as audit-only; only the Host-projected
+  inquiry collection can grant semantic source admission.
+- Preserve structurally valid source query parameters without parameter-name
+  allowlists or provider-specific URL rewriting.
+- Require reader-facing compiler labels and boundary prose in the closed
+  research contract instead of selecting templates from a language code.
+- Identify degraded artifact classes with explicit versioned markers rather
+  than matching English or Chinese report sentences.
+
+### Fixed
+
+- Remove stale calls to the deleted `lowValueUrl` classifier that caused web
+  discovery to fail at runtime while still passing JavaScript syntax checks.
+- Add an executable discovery-workflow smoke test for both structured search
+  output and plain-URL fallback output.
+- Remove publisher/domain authority inference, fetched-text noise vocabulary,
+  language/script branching, token-overlap deduplication, and topic-specific
+  source transformations from production admission paths.
+
 ## [0.1.0] - 2026-07-23
 
 ### Added
@@ -38,3 +61,4 @@ The project follows Semantic Versioning while the public API remains in the
   overlap admission, and topic-specific source routing.
 
 [0.1.0]: https://github.com/A3S-Lab/DeepResearch/releases/tag/v0.1.0
+[0.1.1]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.0...v0.1.1

@@ -8,7 +8,10 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
     let labels = context.labels;
     let mut output = String::new();
     output.push_str("<!doctype html>\n");
-    output.push_str(&format!("<html lang=\"{}\">\n<head>\n", labels.lang));
+    output.push_str(&format!(
+        "<html lang=\"{}\">\n<head>\n",
+        escape_attribute(&document.language)
+    ));
     output.push_str("<meta charset=\"utf-8\">\n");
     output.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     output.push_str(&format!(
@@ -16,29 +19,32 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
         escape_html(&document.title),
         REPORT_CSS
     ));
-    output.push_str("<a class=\"skip-link\" href=\"#report-main\">Skip to report</a>\n");
+    output.push_str(&format!(
+        "<a class=\"skip-link\" href=\"#report-main\">{}</a>\n",
+        escape_html(&labels.skip_to_report)
+    ));
     output.push_str("<div class=\"report-shell\">\n<header class=\"report-hero\">\n");
     if document.kind == ReportDocumentKind::SourceBacked {
         output.push_str(&format!(
             "<p class=\"eyebrow\">{}</p>\n",
-            escape_html(labels.source_backed)
+            escape_html(&labels.source_backed)
         ));
     } else if document.kind == ReportDocumentKind::NoEvidence {
         output.push_str(&format!(
             "<p class=\"eyebrow\">{}</p>\n",
-            escape_html(labels.no_evidence)
+            escape_html(&labels.no_evidence)
         ));
     }
     output.push_str(&format!("<h1>{}</h1>\n", escape_html(&document.title)));
     output.push_str("</header>\n");
     output.push_str(&format!(
         "<nav aria-label=\"{}\" class=\"report-nav\">\n",
-        escape_attribute(labels.report_sections)
+        escape_attribute(&labels.report_sections)
     ));
     if !document.direct_answer_claims.is_empty() {
         output.push_str(&format!(
             "<a href=\"#direct-answer\">{}</a>\n",
-            escape_html(labels.direct_answer)
+            escape_html(&labels.direct_answer)
         ));
     }
     for (index, dimension) in document.dimensions.iter().enumerate() {
@@ -50,12 +56,15 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
     }
     output.push_str(&format!(
         "<a href=\"#sources\">{}</a>\n</nav>\n",
-        escape_html(labels.sources)
+        escape_html(&labels.sources)
     ));
     output.push_str("<main id=\"report-main\">\n");
     if !document.direct_answer_claims.is_empty() {
         output.push_str("<section id=\"direct-answer\" class=\"report-section direct-answer\">\n");
-        output.push_str(&format!("<h2>{}</h2>\n", escape_html(labels.direct_answer)));
+        output.push_str(&format!(
+            "<h2>{}</h2>\n",
+            escape_html(&labels.direct_answer)
+        ));
         for claim in &document.direct_answer_claims {
             render_claim(&mut output, context, claim);
         }
@@ -65,7 +74,10 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
         render_dimension(&mut output, context, dimension, index + 1);
     }
     output.push_str("<section id=\"sources\" class=\"report-section sources\">\n");
-    output.push_str(&format!("<h2>{}</h2>\n<ol>\n", escape_html(labels.sources)));
+    output.push_str(&format!(
+        "<h2>{}</h2>\n<ol>\n",
+        escape_html(&labels.sources)
+    ));
     for source in &document.source_ledger {
         output.push_str(&format!(
             "<li id=\"source-{}\"><strong>[{}]</strong> ",
@@ -86,13 +98,13 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
         }
         output.push_str(&format!(
             "<span class=\"source-meta\">{}: {}</span>",
-            escape_html(labels.captured),
+            escape_html(&labels.captured),
             escape_html(&source.captured_at)
         ));
         if source.requested_anchor != source.canonical_anchor {
             output.push_str(&format!(
                 "<span class=\"source-meta\">{}: ",
-                escape_html(labels.requested_as)
+                escape_html(&labels.requested_as)
             ));
             if safe_https_anchor(&source.requested_anchor) {
                 output.push_str(&format!(
@@ -127,11 +139,11 @@ fn render_dimension(
     ));
     output.push_str(&format!(
         "<p class=\"coverage\"><span>{}</span>{}</p>\n",
-        escape_html(labels.status),
+        escape_html(&labels.status),
         escape_html(context.coverage_label(dimension.coverage))
     ));
     if !dimension.claims.is_empty() {
-        output.push_str(&format!("<h3>{}</h3>\n", escape_html(labels.findings)));
+        output.push_str(&format!("<h3>{}</h3>\n", escape_html(&labels.findings)));
         for claim in &dimension.claims {
             render_claim(output, context, claim);
         }
@@ -139,7 +151,7 @@ fn render_dimension(
     if !dimension.relations.is_empty() {
         output.push_str(&format!(
             "<div class=\"relations\"><h3>{}</h3>\n",
-            escape_html(labels.contradiction)
+            escape_html(&labels.contradiction)
         ));
         for relation in &dimension.relations {
             render_relation(output, context, relation);
@@ -149,7 +161,7 @@ fn render_dimension(
     if !dimension.gaps.is_empty() {
         output.push_str(&format!(
             "<aside class=\"limitations\"><h3>{}</h3><ul>\n",
-            escape_html(labels.limitations)
+            escape_html(&labels.limitations)
         ));
         for gap in &dimension.gaps {
             output.push_str(&format!("<li>{}</li>\n", escape_html(&gap.text)));
@@ -160,7 +172,7 @@ fn render_dimension(
     {
         output.push_str(&format!(
             "<div class=\"retained-excerpts\"><h3>{}</h3>\n",
-            escape_html(labels.retained_excerpts)
+            escape_html(&labels.retained_excerpts)
         ));
         for source_id in &dimension.source_ids {
             let Some(source) = context.source(source_id) else {
@@ -201,11 +213,11 @@ fn render_claim(output: &mut String, context: &RenderContext<'_>, claim: &Report
         ClaimKind::Fact => {}
         ClaimKind::Inference => output.push_str(&format!(
             "<strong>{}:</strong> ",
-            escape_html(context.labels.inference)
+            escape_html(&context.labels.inference)
         )),
         ClaimKind::Recommendation => output.push_str(&format!(
             "<strong>{}:</strong> ",
-            escape_html(context.labels.recommendation)
+            escape_html(&context.labels.recommendation)
         )),
     }
     output.push_str(&escape_html(&claim.text));
@@ -223,7 +235,7 @@ fn render_claim(output: &mut String, context: &RenderContext<'_>, claim: &Report
     if !basis.is_empty() {
         output.push_str(&format!(
             "<p class=\"basis\"><strong>{}:</strong> ",
-            escape_html(context.labels.basis)
+            escape_html(&context.labels.basis)
         ));
         for (index, basis_number) in basis.iter().enumerate() {
             if index > 0 {
@@ -231,7 +243,7 @@ fn render_claim(output: &mut String, context: &RenderContext<'_>, claim: &Report
             }
             output.push_str(&format!(
                 "<a href=\"#claim-{basis_number}\">{} {basis_number}</a>",
-                escape_html(context.labels.finding)
+                escape_html(&context.labels.finding)
             ));
         }
         output.push_str("</p>\n");
@@ -239,7 +251,7 @@ fn render_claim(output: &mut String, context: &RenderContext<'_>, claim: &Report
     if let Some(derivation) = &claim.derivation {
         output.push_str(&format!(
             "<p class=\"derivation\"><strong>{}:</strong> {}</p>\n",
-            escape_html(context.labels.derivation),
+            escape_html(&context.labels.derivation),
             escape_html(&derivation.method)
         ));
     }
@@ -255,12 +267,12 @@ fn render_relation(output: &mut String, context: &RenderContext<'_>, relation: &
     if references.len() == 2 {
         output.push_str(&format!(
             "<p class=\"contradiction\"><strong>{}:</strong> <a href=\"#claim-{}\">{} {}</a> / <a href=\"#claim-{}\">{} {}</a>.</p>\n",
-            escape_html(context.labels.contradiction),
+            escape_html(&context.labels.contradiction),
             references[0],
-            escape_html(context.labels.finding),
+            escape_html(&context.labels.finding),
             references[0],
             references[1],
-            escape_html(context.labels.finding),
+            escape_html(&context.labels.finding),
             references[1]
         ));
     }

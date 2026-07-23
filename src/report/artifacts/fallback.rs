@@ -289,7 +289,15 @@ fn markdown_plain_text(text: &str) -> String {
             &mut escaped,
             &mut only_leading_digits,
         );
-        if let Some(safe_target) = canonical_research_source_anchor(&target) {
+        if let Some(mut safe_target) = canonical_research_source_anchor(&target) {
+            // Report titles are display text rather than citation ledgers.
+            // Remove every query and fragment uniformly so title privacy does
+            // not depend on a vocabulary of tracking or credential keys.
+            if let Ok(mut url) = reqwest::Url::parse(&safe_target) {
+                url.set_query(None);
+                url.set_fragment(None);
+                safe_target = url.to_string();
+            }
             escaped.push_str(&safe_target);
         } else {
             push_markdown_plain_segment(&target, &mut escaped, &mut only_leading_digits);

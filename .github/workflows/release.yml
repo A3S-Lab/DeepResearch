@@ -43,6 +43,7 @@ jobs:
             src/workflow/retrieval_execution.js |
             node --check -
           node --check src/workflow/generation.js
+          node tests/workflow_discovery_smoke.mjs
       - name: Build release package
         run: cargo package --locked
       - name: Publish GitHub release

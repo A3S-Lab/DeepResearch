@@ -15,13 +15,13 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
     if document.kind == ReportDocumentKind::SourceBacked {
         push_line(
             &mut output,
-            &format!("*{}*", escape_inline(labels.source_backed)),
+            &format!("*{}*", escape_inline(&labels.source_backed)),
         );
         push_line(&mut output, "");
     } else if document.kind == ReportDocumentKind::NoEvidence {
         push_line(
             &mut output,
-            &format!("*{}*", escape_inline(labels.no_evidence)),
+            &format!("*{}*", escape_inline(&labels.no_evidence)),
         );
         push_line(&mut output, "");
     }
@@ -29,7 +29,7 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
     if !document.direct_answer_claims.is_empty() {
         push_line(
             &mut output,
-            &format!("## {}", escape_inline(labels.direct_answer)),
+            &format!("## {}", escape_inline(&labels.direct_answer)),
         );
         push_line(&mut output, "");
         for claim in &document.direct_answer_claims {
@@ -39,7 +39,7 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
 
     push_line(
         &mut output,
-        &format!("## {}", escape_inline(labels.research_dimensions)),
+        &format!("## {}", escape_inline(&labels.research_dimensions)),
     );
     push_line(&mut output, "");
     for dimension in &document.dimensions {
@@ -48,7 +48,7 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
 
     push_line(
         &mut output,
-        &format!("## {}", escape_inline(labels.sources)),
+        &format!("## {}", escape_inline(&labels.sources)),
     );
     push_line(&mut output, "");
     for source in &document.source_ledger {
@@ -104,7 +104,7 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
     );
     push_line(output, "");
     if !dimension.claims.is_empty() {
-        push_line(output, &format!("#### {}", escape_inline(labels.findings)));
+        push_line(output, &format!("#### {}", escape_inline(&labels.findings)));
         push_line(output, "");
         for claim in &dimension.claims {
             render_claim(output, context, claim);
@@ -113,7 +113,7 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
     if !dimension.relations.is_empty() {
         push_line(
             output,
-            &format!("#### {}", escape_inline(labels.contradiction)),
+            &format!("#### {}", escape_inline(&labels.contradiction)),
         );
         push_line(output, "");
         for relation in &dimension.relations {
@@ -124,7 +124,7 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
     if !dimension.gaps.is_empty() {
         push_line(
             output,
-            &format!("#### {}", escape_inline(labels.limitations)),
+            &format!("#### {}", escape_inline(&labels.limitations)),
         );
         push_line(output, "");
         for gap in &dimension.gaps {
@@ -136,7 +136,7 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
     {
         push_line(
             output,
-            &format!("#### {}", escape_inline(labels.retained_excerpts)),
+            &format!("#### {}", escape_inline(&labels.retained_excerpts)),
         );
         push_line(output, "");
         for source_id in &dimension.source_ids {

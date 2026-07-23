@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-const COMPILER_SPEC_VERSION: u32 = 2;
+const COMPILER_SPEC_VERSION: u32 = 3;
 const MAX_ID_CHARS: usize = 64;
 const MAX_QUERY_CHARS: usize = 4_000;
 const MAX_TEXT_CHARS: usize = 1_000;
@@ -112,10 +112,41 @@ pub(super) struct ResearchBudget {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct ReaderLabels {
+    pub(super) report_sections: String,
+    pub(super) skip_to_report: String,
+    pub(super) direct_answer: String,
+    pub(super) research_dimensions: String,
+    pub(super) sources: String,
+    pub(super) status: String,
+    pub(super) findings: String,
+    pub(super) limitations: String,
+    pub(super) retained_excerpts: String,
+    pub(super) contradiction: String,
+    pub(super) inference: String,
+    pub(super) recommendation: String,
+    pub(super) basis: String,
+    pub(super) derivation: String,
+    pub(super) finding: String,
+    pub(super) captured: String,
+    pub(super) requested_as: String,
+    pub(super) source_backed: String,
+    pub(super) no_evidence: String,
+    pub(super) source_backed_gap: String,
+    pub(super) no_evidence_gap: String,
+    pub(super) coverage_claims: String,
+    pub(super) coverage_partial: String,
+    pub(super) coverage_bounded: String,
+    pub(super) coverage_missing: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ResearchSpec {
     pub(super) version: u32,
     pub(super) query: String,
     pub(super) language: String,
+    pub(super) reader_labels: ReaderLabels,
     pub(super) current_date: String,
     pub(super) evidence_scope: EvidenceScope,
     pub(super) dimensions: Vec<ResearchDimension>,
@@ -300,6 +331,39 @@ fn validate_spec(spec: &ResearchSpec) -> Result<(), ContractError> {
         return Err(ContractError::InvalidField {
             field: "current_date",
         });
+    }
+    for label in [
+        &spec.reader_labels.report_sections,
+        &spec.reader_labels.skip_to_report,
+        &spec.reader_labels.direct_answer,
+        &spec.reader_labels.research_dimensions,
+        &spec.reader_labels.sources,
+        &spec.reader_labels.status,
+        &spec.reader_labels.findings,
+        &spec.reader_labels.limitations,
+        &spec.reader_labels.retained_excerpts,
+        &spec.reader_labels.contradiction,
+        &spec.reader_labels.inference,
+        &spec.reader_labels.recommendation,
+        &spec.reader_labels.basis,
+        &spec.reader_labels.derivation,
+        &spec.reader_labels.finding,
+        &spec.reader_labels.captured,
+        &spec.reader_labels.requested_as,
+        &spec.reader_labels.source_backed,
+        &spec.reader_labels.no_evidence,
+        &spec.reader_labels.source_backed_gap,
+        &spec.reader_labels.no_evidence_gap,
+        &spec.reader_labels.coverage_claims,
+        &spec.reader_labels.coverage_partial,
+        &spec.reader_labels.coverage_bounded,
+        &spec.reader_labels.coverage_missing,
+    ] {
+        if !valid_text(label, MAX_TEXT_CHARS) {
+            return Err(ContractError::InvalidField {
+                field: "reader_labels",
+            });
+        }
     }
     if spec.dimensions.is_empty() || spec.budget.max_queries == 0 || spec.budget.max_fetches == 0 {
         return Err(ContractError::InvalidField {

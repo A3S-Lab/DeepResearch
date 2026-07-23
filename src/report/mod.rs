@@ -71,6 +71,7 @@ mod validation_tests;
 pub use evidence_parser::parse_embedded_structured_evidence_json;
 use html::{
     deep_research_completed_report_html, deep_research_completed_report_html_with_presentation,
+    deep_research_degraded_report_html,
 };
 #[doc(hidden)]
 pub fn deep_research_completed_report_html_for_test(query: &str, markdown: &str) -> String {
@@ -99,7 +100,6 @@ include!("artifacts/generated.rs");
 include!("artifacts/resolution.rs");
 include!("artifacts/quality.rs");
 include!("artifacts/fallback.rs");
-include!("artifacts/source_quality.rs");
 include!("artifacts/source_backed.rs");
 include!("artifacts/source_snapshot.rs");
 include!("artifacts/proposal.rs");

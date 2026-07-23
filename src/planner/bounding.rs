@@ -322,7 +322,7 @@ fn validated_semantic_search_queries(
                     .to_string(),
             );
         }
-        if query_contains_url(&query) {
+        if query_is_standalone_url(&query) {
             return Err(
                 "DeepResearch semantic planner returned a URL instead of a search query"
                     .to_string(),
@@ -336,9 +336,10 @@ fn validated_semantic_search_queries(
     Ok(queries)
 }
 
-fn query_contains_url(query: &str) -> bool {
-    let query = query.to_ascii_lowercase();
-    query.contains("://") || query.contains("www.")
+fn query_is_standalone_url(query: &str) -> bool {
+    reqwest::Url::parse(query).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+    })
 }
 
 fn normalize_planner_budget(mut plan: Value) -> Result<Value, String> {

@@ -152,12 +152,7 @@ fn compact_evidence_object(
                 .find_map(deep_research_traceable_source_anchor)
         })
         .unwrap_or_default();
-    let dedupe_key = format!(
-        "{}|{}|{}",
-        round.unwrap_or_default(),
-        summary.to_ascii_lowercase(),
-        first_source
-    );
+    let dedupe_key = format!("{}|{}|{}", round.unwrap_or_default(), summary, first_source);
     if !seen.insert(dedupe_key) {
         return None;
     }
@@ -361,11 +356,7 @@ fn compact_source_evidence_excerpts(
             if focus.is_empty() || quote.is_empty() {
                 return None;
             }
-            let key = format!(
-                "{}|{}",
-                focus.to_ascii_lowercase(),
-                quote.to_ascii_lowercase()
-            );
+            let key = format!("{}|{}", focus, quote);
             seen.insert(key).then_some((focus, quote))
         })
         .take(item_limit)
@@ -455,8 +446,7 @@ pub(super) fn deep_research_compact_string_array(
                     if item.is_empty() {
                         return None;
                     }
-                    let key = item.to_ascii_lowercase();
-                    if !seen.insert(key) {
+                    if !seen.insert(item.to_string()) {
                         return None;
                     }
                     Some(serde_json::Value::String(deep_research_digest_text(

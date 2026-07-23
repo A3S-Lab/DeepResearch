@@ -28,8 +28,7 @@ fn source_backed_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
 }
 
 fn looks_like_deep_research_source_backed_report(text: &str) -> bool {
-    text.contains("这是可核查的来源证据视图")
-        || text.contains("This is a verifiable source-evidence view")
+    text.contains(SOURCE_BACKED_ARTIFACT_MARKER)
 }
 
 fn no_evidence_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
@@ -50,12 +49,7 @@ fn no_evidence_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
 }
 
 fn looks_like_deep_research_no_evidence_report(text: &str) -> bool {
-    let english = text.contains(
-        "This retrieval obtained no source text that can be published safely, so no domain conclusion is generated.",
-    ) && text.contains("No safely publishable source was obtained.");
-    let chinese = text.contains("本次检索没有获得可安全发布的来源文字，因此不生成领域结论。")
-        && text.contains("没有可安全发布的来源。");
-    english || chinese
+    text.contains(NO_EVIDENCE_ARTIFACT_MARKER)
 }
 
 fn fenced_catalog_text(content: &str) -> String {

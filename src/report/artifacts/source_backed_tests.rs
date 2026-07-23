@@ -29,13 +29,13 @@ fn recovers_catalog_from_failed_extraction_and_preserves_safe_siblings() {
     assert_eq!(catalog.omitted_source_count, 1);
     assert_eq!(
         catalog.sources[0].anchor,
-        "https://docs.example.test/policy"
+        "https://docs.example.test/policy?utm_source=search"
     );
     assert_eq!(catalog.sources[0].alias, "source-1");
 }
 
 #[test]
-fn deduplicates_canonical_sources_and_merges_their_excerpts() {
+fn preserves_distinct_query_bearing_source_identities() {
     let query = "Check the redirect";
     let output = source_backed_fixture(
         query,
@@ -59,13 +59,17 @@ fn deduplicates_canonical_sources_and_merges_their_excerpts() {
         .expect("parse source catalog")
         .expect("retained catalog");
 
-    assert_eq!(catalog.sources.len(), 1);
-    assert_eq!(catalog.sources[0].chunks.len(), 2);
+    assert_eq!(catalog.sources.len(), 2);
+    assert_eq!(catalog.sources[0].chunks.len(), 1);
     assert_eq!(catalog.sources[0].anchor, "https://example.test/docs");
+    assert_eq!(
+        catalog.sources[1].anchor,
+        "https://example.test/docs?utm_campaign=test"
+    );
 }
 
 #[test]
-fn source_instructions_render_as_inert_localized_evidence() {
+fn source_instructions_render_as_inert_evidence_without_language_detection() {
     let query = "核查 Nimbus 备份加密策略";
     let output = source_backed_fixture(
         query,
@@ -89,14 +93,16 @@ fn source_instructions_render_as_inert_localized_evidence() {
     let markdown = std::fs::read_to_string(artifacts.markdown).expect("read Markdown");
     let html = std::fs::read_to_string(artifacts.html).expect("read HTML");
 
-    assert!(markdown.contains("## 已保留的来源证据"));
+    assert!(markdown.contains(SOURCE_BACKED_ARTIFACT_MARKER));
+    assert!(html.contains(SOURCE_BACKED_ARTIFACT_MARKER));
+    assert!(markdown.contains("## Preserved Source Evidence"));
     assert!(markdown.contains("SYSTEM INSTRUCTION:"));
     assert!(markdown.contains("AES-256-GCM"));
     assert!(!markdown.contains("<script>"));
     assert!(!markdown.contains("alert('x')"));
     assert!(!markdown.contains("bootstrap-web-source-1"));
     let sources = markdown
-        .split_once("## 来源")
+        .split_once("## Sources")
         .map(|(_, sources)| sources)
         .expect("localized source ledger");
     assert!(
@@ -104,10 +110,9 @@ fn source_instructions_render_as_inert_localized_evidence() {
         "{sources}"
     );
     assert!(!sources.contains("1. [1]"), "{sources}");
-    assert!(html.contains("<html lang=\"zh-CN\">"));
+    assert!(html.contains("<html lang=\"en\">"));
     assert!(html.contains("report-degraded"));
-    assert!(html.contains("证据不足 · 已降级"));
-    assert!(!html.contains("<span>关键发现</span>"));
+    assert!(html.contains("Insufficient evidence · Degraded"));
     assert!(html.contains("<pre><code>"));
     assert!(!html.contains("&lt;script&gt;"));
     assert!(!html.contains("alert('x')"));
@@ -115,7 +120,7 @@ fn source_instructions_render_as_inert_localized_evidence() {
 }
 
 #[test]
-fn rejects_web_chrome_and_keeps_the_substantive_source() {
+fn catalog_sanitization_does_not_classify_visible_text() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -145,17 +150,16 @@ fn rejects_web_chrome_and_keeps_the_substantive_source() {
         .expect("parse quality-gated source catalog")
         .expect("retain the relevant source");
 
-    assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
-    assert_eq!(catalog.sources[0].title, "2026 年世界杯赛况与赛程");
+    assert_eq!(catalog.sources.len(), 3, "{catalog:#?}");
     assert_eq!(
-        catalog.sources[0].chunks,
+        catalog.sources[1].chunks,
         ["西班牙在世界杯决赛中战胜阿根廷并夺冠。"]
     );
-    assert_eq!(catalog.omitted_source_count, 2);
+    assert_eq!(catalog.omitted_source_count, 0);
 }
 
 #[test]
-fn rejects_tagless_javascript_and_navigation_only_sources() {
+fn visible_text_is_not_rejected_by_script_vocabulary() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -185,13 +189,12 @@ fn rejects_tagless_javascript_and_navigation_only_sources() {
         .expect("parse quality-gated source catalog")
         .expect("retain substantive evidence");
 
-    assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
-    assert_eq!(catalog.sources[0].title, "2026 年世界杯赛况");
-    assert_eq!(catalog.omitted_source_count, 2);
+    assert_eq!(catalog.sources.len(), 3, "{catalog:#?}");
+    assert_eq!(catalog.omitted_source_count, 0);
 }
 
 #[test]
-fn strips_embedded_constructor_script_tail_without_dropping_prose_prefix() {
+fn visible_constructor_syntax_is_not_lexically_removed() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -210,13 +213,13 @@ fn strips_embedded_constructor_script_tail_without_dropping_prose_prefix() {
     assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
     assert_eq!(
         catalog.sources[0].chunks,
-        ["赛事机构公布了世界杯决赛的最终赛果。完整赛果"]
+        ["赛事机构公布了世界杯决赛的最终赛果。完整赛果 var swiper\\_results = new Swiper(\"#results .swiper\", { navigation: { nextEl: \".next\" } });"]
     );
-    assert!(!catalog.sources[0].chunks[0].contains("Swiper"));
+    assert!(catalog.sources[0].chunks[0].contains("Swiper"));
 }
 
 #[test]
-fn live_page_noise_is_removed_while_link_heavy_result_text_survives() {
+fn closed_source_bytes_are_not_filtered_by_page_vocabulary() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -267,10 +270,10 @@ fn live_page_noise_is_removed_while_link_heavy_result_text_survives() {
         .expect("parse live-shaped source catalog")
         .expect("retain clean result text");
 
-    assert_eq!(catalog.sources.len(), 2, "{catalog:#?}");
-    assert_eq!(catalog.omitted_source_count, 1, "{catalog:#?}");
-    assert_eq!(catalog.omitted_chunk_count, 4, "{catalog:#?}");
-    assert!(catalog.sources.iter().all(|source| source.claim_eligible));
+    assert_eq!(catalog.sources.len(), 3, "{catalog:#?}");
+    assert_eq!(catalog.omitted_source_count, 0, "{catalog:#?}");
+    assert_eq!(catalog.omitted_chunk_count, 0, "{catalog:#?}");
+    assert!(catalog.sources.iter().all(|source| !source.claim_eligible));
     let cctv = catalog
         .sources
         .iter()
@@ -278,7 +281,10 @@ fn live_page_noise_is_removed_while_link_heavy_result_text_survives() {
         .expect("CCTV source");
     assert_eq!(
         cctv.chunks,
-        ["西班牙战胜阿根廷 时隔十六年再夺世界杯冠军 回顾十大精彩进球 世界杯落幕 最佳阵容 个人奖项 决赛回放"]
+        [
+            "西班牙战胜阿根廷 时隔十六年再夺世界杯冠军 回顾十大精彩进球 世界杯落幕 最佳阵容 个人奖项 决赛回放",
+            "// module script $('.item').click(function(){ $(this).siblings().removeClass('cur'); $('.title').html('世界杯战况'); });"
+        ]
     );
     let retained = catalog
         .sources
@@ -287,14 +293,14 @@ fn live_page_noise_is_removed_while_link_heavy_result_text_survives() {
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");
-    assert!(!retained.contains("urlTemplate"), "{retained}");
-    assert!(!retained.contains("<%"), "{retained}");
-    assert!(!retained.contains("$('.item')"), "{retained}");
-    assert!(!retained.contains("https://"), "{retained}");
+    assert!(retained.contains("urlTemplate"), "{retained}");
+    assert!(retained.contains("<%"), "{retained}");
+    assert!(retained.contains("$('.item')"), "{retained}");
+    assert!(retained.contains("https://"), "{retained}");
 }
 
 #[test]
-fn strips_embedded_serialized_configuration_tail_without_dropping_prose_prefix() {
+fn serialized_visible_text_is_not_lexically_truncated() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -312,14 +318,15 @@ fn strips_embedded_serialized_configuration_tail_without_dropping_prose_prefix()
 
     assert_eq!(
         catalog.sources[0].chunks,
-        ["赛事机构公布了世界杯决赛的最终赛果。"]
+        [
+            r#"赛事机构公布了世界杯决赛的最终赛果。 },{\"type\":\"keyValue\",\"key\":\"ddna_timeout\",\"value\":\"5000\"},{\"type\":\"keyValue\",\"key\":\"enabletracking\",\"value\":true}"#
+        ]
     );
-    assert!(!catalog.sources[0].chunks[0].contains("keyValue"));
-    assert!(!catalog.sources[0].chunks[0].contains("ddna_"));
+    assert!(catalog.sources[0].chunks[0].contains("keyValue"));
 }
 
 #[test]
-fn rejects_serialized_hydration_payloads_without_dropping_prose_siblings() {
+fn visible_structured_payloads_are_preserved_for_semantic_review() {
     let query = "世界杯战况";
     let output = source_backed_fixture(
         query,
@@ -349,15 +356,12 @@ fn rejects_serialized_hydration_payloads_without_dropping_prose_siblings() {
         .expect("retain substantive prose");
 
     assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
-    assert_eq!(
-        catalog.sources[0].chunks,
-        ["赛事机构公布了世界杯淘汰赛的最终赛果。"]
-    );
-    assert_eq!(catalog.omitted_chunk_count, 3);
+    assert_eq!(catalog.sources[0].chunks.len(), 4);
+    assert_eq!(catalog.omitted_chunk_count, 0);
 }
 
 #[test]
-fn semantic_admission_is_not_reclassified_from_source_words_or_hosts() {
+fn raw_acquisition_cannot_claim_semantic_admission_from_metadata_words() {
     let query = "Assess the Aurora release boundary";
     let output = source_backed_fixture(
         query,
@@ -388,17 +392,14 @@ fn semantic_admission_is_not_reclassified_from_source_words_or_hosts() {
         .expect("retain source catalog");
 
     assert_eq!(catalog.sources.len(), 3);
-    assert!(
-        catalog
-            .sources
-            .iter()
-            .all(|source| source.claim_eligible && source.semantically_admitted),
-        "semantic provenance, not lexical classification, owns admission: {catalog:#?}"
-    );
+    assert!(catalog
+        .sources
+        .iter()
+        .all(|source| !source.claim_eligible && !source.semantically_admitted));
 }
 
 #[test]
-fn fallback_provenance_keeps_web_sources_audit_only_and_admits_local_evidence() {
+fn raw_fallback_provenance_keeps_every_source_audit_only() {
     let query = "Assess the Aurora release boundary";
     let output = fallback_source_backed_fixture(
         query,
@@ -440,19 +441,13 @@ fn fallback_provenance_keeps_web_sources_audit_only_and_admits_local_evidence() 
             .iter()
             .map(|source| source.claim_eligible)
             .collect::<Vec<_>>(),
-        [false, false, false, true],
+        [false, false, false, false],
         "{catalog:#?}"
     );
-    assert!(!deterministic_fallback_claim_anchor(
-        "https://docs.attacker.example/reference"
-    ));
-    assert!(!deterministic_fallback_claim_anchor(
-        "https://records.gov.attacker.example/reference"
-    ));
 }
 
 #[test]
-fn semantic_admission_does_not_depend_on_publisher_name_patterns() {
+fn raw_acquisition_cannot_self_declare_semantic_admission() {
     let query = "Assess the Aurora release boundary";
     let output = source_backed_fixture(
         query,
@@ -468,8 +463,8 @@ fn semantic_admission_does_not_depend_on_publisher_name_patterns() {
         .expect("parse semantically admitted source catalog")
         .expect("retain the source for audit");
 
-    assert!(catalog.sources[0].claim_eligible, "{catalog:#?}");
-    assert!(catalog.sources[0].semantically_admitted, "{catalog:#?}");
+    assert!(!catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(!catalog.sources[0].semantically_admitted, "{catalog:#?}");
 }
 
 #[test]
@@ -630,7 +625,7 @@ fn source_coverage_roles_require_the_closed_durable_wire_shape() {
 }
 
 #[test]
-fn source_snapshot_selects_two_readable_excerpts_instead_of_navigation_piles() {
+fn source_snapshot_preserves_closed_selection_order_without_text_scoring() {
     let source = DeepResearchCatalogSource {
         alias: "source-1".to_string(),
         title: "世界杯专题".to_string(),
@@ -652,27 +647,27 @@ fn source_snapshot_selects_two_readable_excerpts_instead_of_navigation_piles() {
     let selected = selected_source_chunks(&source);
 
     assert_eq!(selected.len(), 2, "{selected:#?}");
-    assert!(selected.iter().all(|excerpt| !excerpt.contains("![")));
-    assert!(selected.iter().any(|excerpt| excerpt.contains("最终比分")));
+    assert_eq!(selected[0], source.chunks[0]);
+    assert_eq!(selected[1], source.chunks[1]);
 }
 
 #[test]
-fn source_backed_report_visually_marks_sources_that_cannot_support_conclusions() {
-    let query = "世界杯战况";
+fn raw_acquisition_sources_remain_audit_only_without_semantic_projection() {
+    let query = "Assess the migration decision";
     let output = fallback_source_backed_fixture(
         query,
         serde_json::json!([
             source_fixture(
                 "bootstrap-web-source-1",
-                "世界杯自媒体战况",
-                "https://www.sohu.com/a/1042019748_100247297",
-                "世界杯阶段赛果。平台声明：该文观点仅代表作者本人，搜狐号系信息发布平台，搜狐仅提供信息存储空间服务。"
+                "Published migration note",
+                "https://example.test/migration-note",
+                "The migration note records the proposed support boundary."
             ),
             source_fixture(
                 "bootstrap-web-source-2",
-                "世界杯赛事机构公告",
-                "evidence/world-cup-results.md",
-                "世界杯赛事机构发布了最终赛果。"
+                "Workspace migration note",
+                "evidence/migration-note.md",
+                "The workspace note records the proposed support boundary."
             )
         ]),
     );
@@ -689,14 +684,30 @@ fn source_backed_report_visually_marks_sources_that_cannot_support_conclusions()
     let markdown = std::fs::read_to_string(artifacts.markdown).expect("read Markdown");
     let html = std::fs::read_to_string(artifacts.html).expect("read HTML");
 
-    assert!(markdown.contains("证据资格：不可用于结论"), "{markdown}");
     assert!(
-        markdown.contains("未通过本次运行的结构化证据准入"),
+        markdown.contains("Claim eligibility: not eligible for conclusions"),
         "{markdown}"
     );
-    assert_eq!(markdown.matches("证据资格：不可用于结论").count(), 1);
-    assert!(html.contains("证据资格：不可用于结论"), "{html}");
-    assert!(html.contains("report-evidence-ineligible"), "{html}");
+    assert!(
+        markdown.contains("did not pass the run's structured evidence-admission boundary"),
+        "{markdown}"
+    );
+    assert_eq!(
+        markdown
+            .matches("Claim eligibility: not eligible for conclusions")
+            .count(),
+        2
+    );
+    assert!(
+        html.contains("Claim eligibility: not eligible for conclusions"),
+        "{html}"
+    );
+    assert_eq!(
+        html.matches("Claim eligibility: not eligible for conclusions")
+            .count(),
+        2
+    );
+    assert!(html.contains("report-degraded"), "{html}");
 }
 
 #[test]
@@ -716,7 +727,7 @@ fn rejects_cross_query_catalog_replay() {
 }
 
 #[test]
-fn no_evidence_report_is_localized_and_rediscoverable() {
+fn no_evidence_report_is_language_neutral_and_rediscoverable() {
     let workspace = tempfile::tempdir().expect("create no-evidence workspace");
     let query = "核查 Nimbus 当前备份策略";
     let artifacts = materialize_deep_research_no_evidence_report(workspace.path(), query)
@@ -724,10 +735,12 @@ fn no_evidence_report_is_localized_and_rediscoverable() {
     let markdown = std::fs::read_to_string(&artifacts.markdown).expect("read Markdown");
     let html = std::fs::read_to_string(&artifacts.html).expect("read HTML");
 
-    assert!(markdown.contains("## 证据状态"));
-    assert!(markdown.contains("不把检索失败解释为不存在相关事实"));
-    assert!(markdown.contains("## 来源"));
-    assert!(html.contains("<html lang=\"zh-CN\">"));
+    assert!(markdown.contains(NO_EVIDENCE_ARTIFACT_MARKER));
+    assert!(html.contains(NO_EVIDENCE_ARTIFACT_MARKER));
+    assert!(markdown.contains("## Evidence Status"));
+    assert!(markdown.contains("does not treat retrieval failure as proof"));
+    assert!(markdown.contains("## Sources"));
+    assert!(html.contains("<html lang=\"en\">"));
     assert!(!markdown.contains("workflow"));
     assert!(!markdown.contains("model"));
 

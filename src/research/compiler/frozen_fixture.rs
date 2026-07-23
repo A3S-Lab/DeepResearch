@@ -185,9 +185,10 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
         (false, false) => panic!("{}: fixture has no acquisition transport", case.id),
     };
     let spec = ResearchSpec {
-        version: 2,
+        version: 3,
         query: case.query.clone(),
         language: case.language.clone(),
+        reader_labels: super::test_support::reader_labels(&case.language),
         current_date: "2026-07-21".to_string(),
         evidence_scope,
         dimensions,

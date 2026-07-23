@@ -18,13 +18,17 @@ semantic outline ──> 0..3 validated supplemental queries
         └─ invalid or unavailable ─> exact-query fallback
                                                        │
                                                        v
-                                      merged fetched-source packet
+                                      raw acquisition packet
+                                            (audit-only)
                                                        │
-                                  deterministic source admission
+                                  closed semantic source selection
+                                                       │
+                                  Host inquiry projection of exact
+                                  source/chunk IDs, criteria, and roles
                                                        │
                          ┌─────────────┴─────────────┐
                          │                           │
-                  no safe evidence             safe evidence
+               no admitted evidence       semantically admitted evidence
                          │                           │
                no-evidence artifact      source-backed artifact
                                                      │
@@ -41,23 +45,31 @@ replace the exact query, return URLs, select transport budgets, or publish
 facts. A planning failure therefore degrades to the original query instead of
 ending the run.
 
-Publication is progressive. Once safe fetched text exists, the engine stages a
-source-backed Markdown and HTML report before attempting synthesis. A failed,
-timed-out, or invalid proposal cannot erase that artifact. If no source passes
+Publication is progressive. Once the Host has a semantically admitted inquiry
+projection, the engine stages a source-backed Markdown and HTML report before
+attempting synthesis. A failed, timed-out, or invalid proposal cannot erase
+that artifact. Raw acquisition may still be retained in an audit-only source
+view, but it cannot support a conclusion. If no source passes semantic
 admission, the engine publishes an explicit no-evidence boundary report.
 
-Semantic source admission is preserved as typed provenance from retrieval to
-publication. The report compiler also preserves each source's exact research
-track, completion-criterion, primary-source, and independent-source edges.
-Comprehensive reports are admitted only when every material track has findings
-that close all declared criteria and satisfy the declared source roles. The
-published findings remain grouped by those research tracks.
+The Host-projected inquiry collection is the sole semantic admission
+authority. Raw acquisition metadata cannot promote source bytes by naming a
+selector mode, and workspace paths receive no special trust. Web and workspace
+sources must both arrive through exact selected source/chunk identities and
+typed track, completion-criterion, primary-source, and independent-source
+edges. Comprehensive reports are admitted only when every material track has
+findings that close all declared criteria and satisfy the declared source
+roles. The published findings remain grouped by those research tracks.
 
-Discovery fallback is deliberately audit-only for web evidence. Search rank,
-query-word overlap, publisher names, TLDs, and maintained site allowlists never
-promote a fallback web result into claim evidence. A web source becomes
-claim-eligible only through the bounded semantic source-selection path;
-workspace evidence remains eligible inside the user-authorized local scope.
+Discovery fallback is deliberately audit-only. Search rank, query-word
+overlap, publisher names, domains, TLDs, URL path vocabulary, maintained site
+lists, and workspace path shape never promote a result into claim evidence.
+The Host validates only closed schemas, exact IDs, budgets, source bytes,
+typed relationships, and provenance.
+
+Reader-facing titles, section labels, and evidence-boundary prose are authored
+inside closed model contracts. The Host validates their shape and renders them;
+it does not detect a query language or choose a language-specific template.
 
 ## Ownership Boundary
 
@@ -65,7 +77,7 @@ workspace evidence remains eligible inside the user-authorized local scope.
 | --- | --- |
 | `DeepResearchEngine` | Stage ordering, bounded fallbacks, evidence merging, progressive publication, and terminal result metadata |
 | Planner | Domain-neutral research scope, evidence tracks, completion criteria, and bounded supplemental queries |
-| Retrieval workflows | Search/fetch tool orchestration, source selection, sanitization, and bounded evidence materialization |
+| Retrieval workflows | Search/fetch orchestration, closed semantic selection, raw acquisition checkpoints, and bounded evidence materialization |
 | Report pipeline | Closed-evidence prompts, source catalog construction, claim admission, citation gates, Markdown, and HTML |
 | Product adapter | Model execution, workflow runtime/tool access, artifact storage, and progress presentation |
 
@@ -151,10 +163,11 @@ cargo test --all-targets --locked
 cargo package --locked
 ```
 
-The integration suite includes domain-agnostic contract and provenance tests
-that preserve exact-query authority, keep semantic selection closed over exact
-candidate IDs, retain typed research coverage, and reject topic-specific
-production routing.
+The integration suite includes cross-topic structural-isomorphism tests,
+domain-agnostic contract and provenance tests, and a runtime smoke test for the
+embedded JavaScript discovery workflow. Together they preserve exact-query
+authority, keep semantic selection closed over exact candidate IDs, and retain
+typed research coverage without testing a blacklist of forbidden topics.
 
 ## License
 

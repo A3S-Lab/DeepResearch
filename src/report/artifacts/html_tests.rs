@@ -97,24 +97,24 @@ fn editorial_report_html_has_responsive_print_and_accessibility_contract() {
         "# 简洁研究标题\n\n## 核心发现\n\n结论正文。\n\n## Sources\n\n- [来源](https://example.com)",
     );
 
-    assert!(html.contains("<html lang=\"zh-CN\">"), "{html}");
+    assert!(html.contains("<html lang=\"en\">"), "{html}");
     assert!(html.contains("class=\"hero\""), "{html}");
     assert!(html.contains("class=\"report-shell\""), "{html}");
     assert!(html.contains("@media(max-width:820px)"), "{html}");
-    assert!(html.contains("横向滑动查看全部列"), "{html}");
+    assert!(html.contains("swipe to inspect all columns"), "{html}");
     assert!(html.contains("@media print"), "{html}");
     assert!(html.contains("prefers-reduced-motion"), "{html}");
     assert!(html.contains(":focus-visible"), "{html}");
     assert!(
-        html.contains("<strong>01</strong><span>引用来源</span>"),
+        html.contains("<strong>01</strong><span>Cited sources</span>"),
         "{html}"
     );
     assert!(
-        html.contains("<strong>01</strong><span>报告章节</span>"),
+        html.contains("<strong>02</strong><span>Report sections</span>"),
         "{html}"
     );
     assert!(
-        html.contains("<strong>01</strong><span>分钟阅读</span>"),
+        html.contains("<strong>01</strong><span>Min read</span>"),
         "{html}"
     );
     assert!(html.contains("class=\"toc\""), "{html}");
@@ -132,9 +132,7 @@ fn editorial_report_html_has_responsive_print_and_accessibility_contract() {
         !html.contains("class=\"report-section section--sources"),
         "{html}"
     );
-    assert!(html.contains("aria-label=\"报告元数据\""), "{html}");
-    assert!(!html.contains("Evidence profile"), "{html}");
-    assert!(!html.contains("Min read"), "{html}");
+    assert!(html.contains("aria-label=\"Report metadata\""), "{html}");
     assert_eq!(html.matches("<h1>").count(), 1, "{html}");
     assert!(!html.contains("<script"), "{html}");
 }
@@ -164,7 +162,7 @@ fn headings_do_not_select_information_shapes_without_a_typed_section_plan() {
     ] {
         assert!(!html.contains(forbidden), "unexpected {forbidden}: {html}");
     }
-    assert!(html.contains("<strong>02</strong><span>Key findings</span>"));
+    assert!(html.contains("<strong>06</strong><span>Report sections</span>"));
     assert!(html.contains("href=\"#section-6\""));
 }
 
@@ -269,7 +267,7 @@ fn split_hero_uses_the_report_reading_path_instead_of_decorative_metrics() {
 
 #[test]
 fn recovery_report_is_visually_and_semantically_degraded() {
-    let html = deep_research_completed_report_html(
+    let html = deep_research_degraded_report_html(
         "Current market state",
         "# DeepResearch Recovery Report\n\n## Findings\n\nEvidence collection did not complete.\n\n## Sources And Evidence\n\n- https://example.com/partial\n\n## Confidence And Limits\n\nConfidence is low.",
     );

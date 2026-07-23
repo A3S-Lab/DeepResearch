@@ -70,7 +70,11 @@ pub fn normalize_research_source_anchor(value: &str) -> Option<String> {
     if raw.is_empty() || raw.chars().any(char::is_control) {
         return None;
     }
-    let normalized = normalize_research_source_text(value)
+    let normalized = value
+        .replace("&amp;", "&")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
         .trim_matches(|ch: char| {
             matches!(
                 ch,
@@ -81,20 +85,8 @@ pub fn normalize_research_source_anchor(value: &str) -> Option<String> {
         .trim()
         .trim_end_matches('/')
         .to_string();
-    let is_search_navigation = reqwest::Url::parse(&normalized).is_ok_and(|url| {
-        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-        let path = url.path().to_ascii_lowercase();
-        matches!(
-            host.as_str(),
-            "search.brave.com" | "duckduckgo.com" | "www.sogou.com" | "www.so.com"
-        ) || ((host == "google.com" || host.ends_with(".google.com"))
-            && path.starts_with("/search"))
-            || ((host == "bing.com" || host.ends_with(".bing.com") || host == "cn.bing.com")
-                && path.starts_with("/search"))
-    });
     if normalized.len() < 4
         || normalized.starts_with("a3s://")
-        || is_search_navigation
         || deep_research_contains_workflow_store_reference(&normalized)
         || deep_research_output_has_internal_leak(&normalized)
         || !looks_like_traceable_source(&normalized)
@@ -116,28 +108,23 @@ fn canonical_research_source_anchor(value: &str) -> Option<String> {
         }
         url.set_username("").ok()?;
         url.set_password(None).ok()?;
-        let mut safe_query = url
+        let mut query_pairs = url
             .query_pairs()
-            .filter_map(|(key, value)| {
-                let key = key.to_ascii_lowercase();
-                let allowed_key = matches!(
-                    key.as_str(),
-                    "lang" | "seq_code" | "id" | "article_id" | "news_id"
-                );
-                let allowed_value = !value.is_empty()
-                    && value.len() <= 128
-                    && value
-                        .chars()
-                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'));
-                (allowed_key && allowed_value).then(|| (key, value.into_owned()))
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .filter(|(key, value)| {
+                !key.is_empty()
+                    && key.len() <= 256
+                    && value.len() <= 2_048
+                    && !key.chars().any(char::is_control)
+                    && !value.chars().any(char::is_control)
             })
             .collect::<Vec<_>>();
-        safe_query.sort();
-        safe_query.dedup();
+        query_pairs.sort();
+        query_pairs.dedup();
         url.set_query(None);
-        if !safe_query.is_empty() {
+        if !query_pairs.is_empty() {
             url.query_pairs_mut()
-                .extend_pairs(safe_query.iter().map(|(key, value)| (key, value)));
+                .extend_pairs(query_pairs.iter().map(|(key, value)| (key, value)));
         }
         url.set_fragment(None);
         url.to_string()
@@ -183,15 +170,6 @@ fn looks_like_traceable_source(value: &str) -> bool {
         });
     let has_relative_path_shape = without_line.contains('/') || without_line.contains('\\');
     has_file_extension || has_relative_path_shape
-}
-
-fn normalize_research_source_text(value: &str) -> String {
-    value
-        .to_ascii_lowercase()
-        .replace("&amp;", "&")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn visible_char_count(text: &str) -> usize {

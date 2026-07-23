@@ -134,17 +134,14 @@ pub(super) fn deep_research_safe_source_query(url: &reqwest::Url) -> Vec<(String
     let mut safe_query = url
         .query_pairs()
         .filter_map(|(key, value)| {
-            let key = key.to_ascii_lowercase();
-            let allowed_key = matches!(
-                key.as_str(),
-                "lang" | "seq_code" | "id" | "article_id" | "news_id"
-            );
-            let allowed_value = !value.is_empty()
-                && value.len() <= 128
-                && value
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'));
-            (allowed_key && allowed_value).then(|| (key, value.into_owned()))
+            let key = key.into_owned();
+            let value = value.into_owned();
+            (!key.is_empty()
+                && key.len() <= 256
+                && value.len() <= 2_048
+                && !key.chars().any(char::is_control)
+                && !value.chars().any(char::is_control))
+            .then_some((key, value))
         })
         .collect::<Vec<_>>();
     safe_query.sort();
@@ -206,6 +203,14 @@ pub(super) fn deep_research_sanitize_evidence_urls(value: &mut serde_json::Value
 }
 
 pub(super) fn deep_research_sanitize_evidence_text(text: &str) -> String {
+    deep_research_sanitize_embedded_urls(text, true)
+}
+
+pub(super) fn deep_research_sanitize_recovery_text(text: &str) -> String {
+    deep_research_sanitize_embedded_urls(text, false)
+}
+
+fn deep_research_sanitize_embedded_urls(text: &str, preserve_query: bool) -> String {
     let lower = text.to_ascii_lowercase();
     let mut output = String::with_capacity(text.len());
     let mut cursor = 0;
@@ -237,7 +242,13 @@ pub(super) fn deep_research_sanitize_evidence_text(text: &str) -> String {
             }
         }
 
-        if let Some((_, safe)) = deep_research_safe_source_anchor(&text[start..candidate_end]) {
+        if let Some((_, mut safe)) = deep_research_safe_source_anchor(&text[start..candidate_end]) {
+            if !preserve_query {
+                if let Ok(mut url) = reqwest::Url::parse(&safe) {
+                    url.set_query(None);
+                    safe = url.to_string();
+                }
+            }
             output.push_str(&safe);
         }
         output.push_str(&text[candidate_end..token_end]);

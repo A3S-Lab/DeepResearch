@@ -172,8 +172,8 @@ fn admitted_closed_evidence_report_replaces_the_staged_source_snapshot() {
     let runtime = FakeRuntime::new(
         Ok(valid_outline()),
         Some(Ok(valid_report_proposal())),
-        source_output.clone(),
         source_output,
+        inquiry_collection_source_output(query),
     );
     let engine = DeepResearchEngine::new(&runtime, &runtime, &runtime, &runtime);
 
@@ -288,6 +288,15 @@ fn valid_outline() -> Value {
 
 fn valid_report_proposal() -> Value {
     serde_json::json!({
+        "labels": {
+            "answer": "Direct Answer",
+            "findings": "Findings",
+            "recommendations": "Evidence-Based Recommendations",
+            "boundary": "Evidence Boundary",
+            "limitations": "Limitations",
+            "evidence_boundary": "This report publishes no conclusion beyond the fetched evidence.",
+            "sources": "Sources"
+        },
         "summary": [{
             "text": "Nimbus version 2 receives fixes through September 2027.",
             "source_aliases": ["source-1"],
