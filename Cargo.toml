@@ -1,0 +1,17 @@
+[package]
+name = "a3s-deep-research"
+version = "0.1.0"
+edition = "2021"
+description = "Evidence-first, domain-agnostic deep research engine for A3S"
+license = "MIT"
+repository = "https://github.com/A3S-Lab/DeepResearch"
+homepage = "https://github.com/A3S-Lab/DeepResearch"
+keywords = ["research", "agents", "retrieval", "evidence", "a3s"]
+categories = ["asynchronous", "text-processing"]
+
+[lib]
+name = "a3s_deep_research"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
