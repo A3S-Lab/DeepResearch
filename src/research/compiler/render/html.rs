@@ -58,7 +58,7 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
         "<a href=\"#sources\">{}</a>\n</nav>\n",
         escape_html(&labels.sources)
     ));
-    output.push_str("<main id=\"report-main\">\n");
+    output.push_str("<main id=\"report-main\" data-a3s-deep-research-document=\"v1\">\n");
     if !document.direct_answer_claims.is_empty() {
         output.push_str("<section id=\"direct-answer\" class=\"report-section direct-answer\">\n");
         output.push_str(&format!(

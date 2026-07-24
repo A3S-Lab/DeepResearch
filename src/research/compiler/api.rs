@@ -21,7 +21,16 @@ pub enum EvidenceCompilerOutcome {
 pub struct CompilerCoverage {
     pub dimension_id: String,
     pub material: bool,
-    pub status: String,
+    pub status: CompilerStructuralCoverage,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilerStructuralCoverage {
+    ClaimsOnly,
+    ClaimsAndGap,
+    GapOnly,
+    Missing,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -30,16 +39,51 @@ pub struct CompilerRejection {
     pub reason: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilerClaimPlacement {
+    DirectAnswer,
+    Finding,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilerClaimKind {
+    Fact,
+    Inference,
+    Recommendation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CompilerClaimSupport {
+    pub claim_id: String,
+    pub dimension_id: String,
+    pub placement: CompilerClaimPlacement,
+    pub kind: CompilerClaimKind,
+    pub source_ids: Vec<String>,
+    pub basis_claim_ids: Vec<String>,
+    pub derivation_method: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CompiledEvidenceReport {
     pub outcome: EvidenceCompilerOutcome,
     pub markdown: String,
     pub html: String,
     pub coverage: Vec<CompilerCoverage>,
+    pub thesis: Option<String>,
+    pub direct_answer_claim_count: usize,
+    pub finding_claim_count: usize,
     pub accepted_claim_count: usize,
+    pub accepted_relation_count: usize,
+    pub accepted_derivation_count: usize,
+    pub accepted_basis_edge_count: usize,
     pub accepted_gap_count: usize,
     pub rejected_item_count: usize,
     pub rejections: Vec<CompilerRejection>,
+    pub claim_support: Vec<CompilerClaimSupport>,
+    pub cited_source_count: usize,
+    pub substantive_character_count: usize,
     pub source_count: usize,
 }
 
@@ -128,16 +172,77 @@ pub fn compile_evidence_report(
 
     let outcome = compiler_outcome(report_structural_outcome(&document));
     let coverage = document_coverage(&document);
+    let claim_support = document_claim_support(&document);
+    let direct_answer_claim_count = document.direct_answer_claims.len();
+    let finding_claim_count = document
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.claims.len())
+        .sum();
+    let accepted_relation_count = document
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.relations.len())
+        .sum();
+    let accepted_derivation_count = claim_support
+        .iter()
+        .filter(|claim| claim.derivation_method.is_some())
+        .count();
+    let accepted_basis_edge_count = claim_support
+        .iter()
+        .map(|claim| claim.basis_claim_ids.len())
+        .sum();
+    let cited_source_count = claim_support
+        .iter()
+        .flat_map(|claim| claim.source_ids.iter())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let substantive_character_count = document
+        .direct_answer_claims
+        .iter()
+        .chain(
+            document
+                .dimensions
+                .iter()
+                .flat_map(|dimension| dimension.claims.iter()),
+        )
+        .map(|claim| {
+            claim
+                .text
+                .chars()
+                .filter(|character| !character.is_whitespace() && !character.is_control())
+                .count()
+        })
+        .sum();
+    let thesis = document
+        .direct_answer_claims
+        .first()
+        .or_else(|| {
+            document
+                .dimensions
+                .iter()
+                .find_map(|dimension| dimension.claims.first())
+        })
+        .map(|claim| claim.text.clone());
     let rendered = render_report_document(&document);
     Ok(CompiledEvidenceReport {
         outcome,
         markdown: rendered.markdown,
         html: rendered.html,
         coverage,
+        thesis,
+        direct_answer_claim_count,
+        finding_claim_count,
         accepted_claim_count,
+        accepted_relation_count,
+        accepted_derivation_count,
+        accepted_basis_edge_count,
         accepted_gap_count,
         rejected_item_count: rejections.len(),
         rejections,
+        claim_support,
+        cited_source_count,
+        substantive_character_count,
         source_count: catalog.sources.len(),
     })
 }
@@ -179,12 +284,53 @@ fn document_coverage(document: &ReportDocument) -> Vec<CompilerCoverage> {
             dimension_id: dimension.dimension_id.clone(),
             material: dimension.material,
             status: match dimension.coverage {
-                StructuralCoverage::ClaimsOnly => "claims_only",
-                StructuralCoverage::ClaimsAndGap => "claims_and_gap",
-                StructuralCoverage::GapOnly => "gap_only",
-                StructuralCoverage::Missing => "missing",
-            }
-            .to_string(),
+                StructuralCoverage::ClaimsOnly => CompilerStructuralCoverage::ClaimsOnly,
+                StructuralCoverage::ClaimsAndGap => CompilerStructuralCoverage::ClaimsAndGap,
+                StructuralCoverage::GapOnly => CompilerStructuralCoverage::GapOnly,
+                StructuralCoverage::Missing => CompilerStructuralCoverage::Missing,
+            },
+        })
+        .collect()
+}
+
+fn document_claim_support(document: &ReportDocument) -> Vec<CompilerClaimSupport> {
+    document
+        .direct_answer_claims
+        .iter()
+        .chain(
+            document
+                .dimensions
+                .iter()
+                .flat_map(|dimension| dimension.claims.iter()),
+        )
+        .map(|claim| CompilerClaimSupport {
+            claim_id: claim.id.clone(),
+            dimension_id: claim.dimension_id.clone(),
+            placement: match claim.placement {
+                super::ClaimPlacement::DirectAnswer => CompilerClaimPlacement::DirectAnswer,
+                super::ClaimPlacement::Finding => CompilerClaimPlacement::Finding,
+            },
+            kind: match claim.kind {
+                super::ClaimKind::Fact => CompilerClaimKind::Fact,
+                super::ClaimKind::Inference => CompilerClaimKind::Inference,
+                super::ClaimKind::Recommendation => CompilerClaimKind::Recommendation,
+            },
+            source_ids: claim
+                .citation_numbers
+                .iter()
+                .filter_map(|number| {
+                    document
+                        .source_ledger
+                        .iter()
+                        .find(|source| source.number == *number)
+                        .map(|source| source.id.clone())
+                })
+                .collect(),
+            basis_claim_ids: claim.basis_claim_ids.clone(),
+            derivation_method: claim
+                .derivation
+                .as_ref()
+                .map(|derivation| derivation.method.clone()),
         })
         .collect()
 }

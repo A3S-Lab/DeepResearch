@@ -41,6 +41,16 @@ fn host_fallback_is_structurally_isomorphic_across_unrelated_queries() {
         assert_eq!(first.pointer(pointer), second.pointer(pointer), "{pointer}");
     }
     assert_eq!(
+        first.pointer("/research_scope"),
+        Some(&serde_json::json!("comprehensive")),
+        "unknown semantic scope must use the stronger publication gate"
+    );
+    assert_eq!(
+        first.pointer("/freshness_required"),
+        Some(&serde_json::json!(true)),
+        "unknown freshness must not authorize an undated synthesized answer"
+    );
+    assert_eq!(
         first.pointer("/search_queries/0"),
         Some(&serde_json::json!("Compare two storage engines"))
     );

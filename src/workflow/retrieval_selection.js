@@ -26,19 +26,44 @@
     }
   };
 
+  const selectorShardPacket = (packet, source, chunks) => ({
+    version: packet.version,
+    focuses: packet.focuses,
+    sources: [Object.assign({}, source, { chunks })],
+  });
   const selectorShardPackets = (packet) => {
     if (!packet || !Array.isArray(packet.sources)) {
       return [];
     }
-    return packet.sources
-      .filter((source) =>
-        Array.isArray(source.chunks) && source.chunks.length > 0
-      )
-      .map((source) => ({
-        version: packet.version,
-        focuses: packet.focuses,
-        sources: [source],
-      }));
+    return packet.sources.flatMap((source) => {
+      if (!Array.isArray(source.chunks) || source.chunks.length === 0) {
+        return [];
+      }
+      const shards = [];
+      let chunks = [];
+      for (const chunk of source.chunks) {
+        const candidateChunks = [...chunks, chunk];
+        const candidate = selectorShardPacket(
+          packet,
+          source,
+          candidateChunks
+        );
+        if (
+          chunks.length > 0 &&
+          utf8ByteLength(JSON.stringify(candidate)) >
+            MAX_SELECTOR_SHARD_PACKET_BYTES
+        ) {
+          shards.push(selectorShardPacket(packet, source, chunks));
+          chunks = [chunk];
+        } else {
+          chunks = candidateChunks;
+        }
+      }
+      if (chunks.length > 0) {
+        shards.push(selectorShardPacket(packet, source, chunks));
+      }
+      return shards;
+    });
   };
 
   const selectorInput = (packet, options) => {

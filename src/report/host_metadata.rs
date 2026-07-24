@@ -37,18 +37,7 @@ pub(super) fn deep_research_canonical_workflow_output(
 pub(super) fn deep_research_prompt_workflow_output(workflow_output: &str) -> String {
     let value = match serde_json::from_str::<serde_json::Value>(workflow_output) {
         Ok(value) => value,
-        Err(_) => {
-            if deep_research_output_has_internal_leak(workflow_output) {
-                return "Research evidence was non-JSON and contained internal tool logs; raw text withheld from synthesis.".to_string();
-            }
-            return deep_research_truncate_chars(
-                &workflow_output
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                DEEP_RESEARCH_PROMPT_TEXT_LIMIT,
-            );
-        }
+        Err(_) => return "Research evidence did not use the typed JSON envelope; raw text was withheld from synthesis.".to_string(),
     };
     let digest = deep_research_workflow_output_digest(&value);
     serde_json::to_string_pretty(&digest).unwrap_or_else(|_| {
@@ -502,10 +491,6 @@ pub(super) fn deep_research_collection_status(value: &serde_json::Value) -> &'st
 /// Historical workflow-output compatibility only. New DeepResearch runs carry
 /// `terminal_authority = host_inquiry_reducer` and return before this adapter.
 fn legacy_checked_loop_collection_status(value: &serde_json::Value) -> &'static str {
-    let mode = value
-        .get("mode")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
     let research_status = value
         .pointer("/research/status")
         .and_then(serde_json::Value::as_str)
@@ -538,10 +523,7 @@ fn legacy_checked_loop_collection_status(value: &serde_json::Value) -> &'static 
         .pointer("/verification/status")
         .and_then(serde_json::Value::as_str)
         == Some("degraded");
-    if mode.contains("failed")
-        || research_status.eq_ignore_ascii_case("failed")
-        || value.get("error").is_some()
-    {
+    if research_status.eq_ignore_ascii_case("failed") || value.get("error").is_some() {
         "failed"
     } else if checker_finalized && value.get("runtime_error").is_none() && has_completed_evidence {
         // Search and fetch backends may return partial transport coverage even
@@ -559,7 +541,6 @@ fn legacy_checked_loop_collection_status(value: &serde_json::Value) -> &'static 
         // verification explicit in the report instead of emitting Recovery.
         "completed"
     } else if value.get("runtime_error").is_some()
-        || mode.contains("fallback")
         || !research_status.eq_ignore_ascii_case("success")
         || !has_completed_evidence
     {

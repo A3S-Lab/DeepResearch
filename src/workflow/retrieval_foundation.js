@@ -2,10 +2,10 @@ async function run(ctx, inputs) {
   const MAX_SOURCES = 8;
   const MAX_CATALOG_SOURCES = 16;
   const MAX_DISCOVERY_CANDIDATES = 35;
-  // Eight ordinary fetched sources can each approach 40 semantic chunks.
-  // Keep the complete catalog closed and fail rather than sample it, while
-  // leaving bounded headroom for a full eight-source public portfolio.
-  const MAX_CHUNKS = 384;
+  // Keep a complete bounded catalog without positional sampling. Source-local
+  // selector windows below keep every admitted chunk inside the generation
+  // transport limit before the existing exact-ID reduction pass.
+  const MAX_CHUNKS = 640;
   const MAX_CHUNK_CHARS = 700;
   // Small catalogs use one direct selector. Larger catalogs are split only on
   // source identity: one model call sees the complete fetched text for one
@@ -13,6 +13,7 @@ async function run(ctx, inputs) {
   // cascade or arbitrating unrelated source contracts.
   const MAX_DIRECT_SELECTOR_CHUNKS = 10;
   const MAX_SELECTOR_SHARD_CANDIDATES = 4;
+  const MAX_SELECTOR_SHARD_PACKET_BYTES = 32 * 1024;
   const MAX_EXCERPTS_PER_SOURCE = 4;
   const MAX_EXCERPT_CHARS_PER_SOURCE = 2800;
   const MAX_DOCUMENT_RANGES = 3;
@@ -33,7 +34,8 @@ async function run(ctx, inputs) {
   const MODEL_GENERATION_SHARD_ACTIVE_TIMEOUT_MS = 270_000;
   const STEP_DISCOVER_WEB = "discover_web_sources";
   const STEP_SELECT_WEB = "select_web_sources";
-  const STEP_WEB = "retrieve_web";
+  const STEP_WEB_SOURCE = "retrieve_web_source";
+  const STEP_WEB_SOURCE_PREFIX = "retrieve_web_source_";
   const STEP_LOCAL = "retrieve_local";
   const STEP_SELECT = "select_evidence_chunks";
   const STEP_SELECT_SHARD_PREFIX = "select_evidence_chunks_shard_";
@@ -41,7 +43,8 @@ async function run(ctx, inputs) {
   const STEP_CHECKPOINT_BOOTSTRAP = "checkpoint_bootstrap_acquisition";
   const STEP_CHECKPOINT_INITIAL = "checkpoint_initial_retrieval";
   const STEP_SELECT_SUPPLEMENTAL_WEB = "select_supplemental_web_sources";
-  const STEP_SUPPLEMENTAL_WEB = "retrieve_supplemental_web";
+  const STEP_SUPPLEMENTAL_WEB_SOURCE_PREFIX =
+    "retrieve_supplemental_web_source_";
   const STEP_SELECT_SUPPLEMENTAL = "select_supplemental_evidence_chunks";
   const STEP_SELECT_SUPPLEMENTAL_SHARD_PREFIX =
     "select_supplemental_evidence_chunks_shard_";
@@ -64,6 +67,64 @@ async function run(ctx, inputs) {
       ? compact
       : `${characters.slice(0, Math.max(0, maximum - 1)).join("")}…`;
   };
+  const utf8ByteLength = (value) => {
+    let bytes = 0;
+    for (const character of String(value || "")) {
+      const codePoint = character.codePointAt(0);
+      bytes += codePoint <= 0x7f
+        ? 1
+        : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+        ? 3
+        : 4;
+    }
+    return bytes;
+  };
+  const utf8Prefix = (value, requestedBytes) => {
+    const text = String(value || "");
+    if (!Number.isSafeInteger(requestedBytes) || requestedBytes < 0) {
+      return { text: "", code_units: 0, complete: false };
+    }
+    if (requestedBytes === 0) {
+      return { text: "", code_units: 0, complete: true };
+    }
+    let bytes = 0;
+    let codeUnits = 0;
+    for (const character of text) {
+      const characterBytes = utf8ByteLength(character);
+      if (bytes + characterBytes > requestedBytes) {
+        return {
+          text: text.slice(0, codeUnits),
+          code_units: codeUnits,
+          complete: false,
+        };
+      }
+      bytes += characterBytes;
+      codeUnits += character.length;
+      if (bytes === requestedBytes) {
+        return {
+          text: text.slice(0, codeUnits),
+          code_units: codeUnits,
+          complete: true,
+        };
+      }
+    }
+    return {
+      text: text.slice(0, codeUnits),
+      code_units: codeUnits,
+      complete: bytes === requestedBytes,
+    };
+  };
+  const artifactIsTruncated = (artifact) => {
+    const value = object(artifact);
+    const originalBytes = Number(value.original_bytes);
+    const shownBytes = Number(value.shown_bytes);
+    return Number.isSafeInteger(originalBytes) &&
+      Number.isSafeInteger(shownBytes) &&
+      originalBytes > shownBytes &&
+      shownBytes >= 0;
+  };
   const uniqueStrings = (values) => {
     const seen = new Set();
     const result = [];
@@ -83,7 +144,6 @@ async function run(ctx, inputs) {
   const toolExitCode = (result) => Number(
     result && (result.exitCode ?? result.exit_code)
   ) || 0;
-
   const cleanUrl = (value) => {
     let url = String(value || "").trim();
     while (/[.,;:!?\]}]$/.test(url)) {
@@ -150,36 +210,65 @@ async function run(ctx, inputs) {
   // can silently replace the artifact selected by the semantic contract.
   const fetchUrl = (value) => cleanUrl(value);
 
-  const batchSections = (output, expectedCount) => {
-    const text = String(output || "");
-    const sections = Array.from({ length: expectedCount }, () => "");
-    const markers = [];
-    const pattern = /^--- \[(\d+):[^\n]*\] ---\r?\n/gm;
-    let match = null;
-    while ((match = pattern.exec(text)) !== null) {
-      markers.push({
-        index: Number(match[1]) - 1,
-        header: match.index,
-        body: pattern.lastIndex,
-      });
+  const batchSections = (batch, expectedCount) => {
+    const results = batch && batch.metadata && Array.isArray(batch.metadata.results)
+      ? batch.metadata.results
+      : [];
+    let text = String(batch && batch.output || "");
+    const batchArtifact = object(
+      batch && batch.metadata && batch.metadata.artifact
+    );
+    if (artifactIsTruncated(batchArtifact)) {
+      text = utf8Prefix(text, Number(batchArtifact.shown_bytes)).text;
     }
-    for (let position = 0; position < markers.length; position += 1) {
-      const marker = markers[position];
-      if (
-        !Number.isInteger(marker.index) ||
-        marker.index < 0 ||
-        marker.index >= expectedCount
-      ) {
-        continue;
+    const sections = Array.from({ length: expectedCount }, () => ({
+      output: "",
+      complete: false,
+    }));
+    let cursor = 0;
+    for (let position = 0; position < expectedCount; position += 1) {
+      const metadata = results.find(
+        (item) => Number(item && item.index) === position
+      );
+      if (!metadata) {
+        break;
       }
-      const end = position + 1 < markers.length
-        ? markers[position + 1].header
-        : text.length;
-      sections[marker.index] = text
-        .slice(marker.body, end)
-        .replace(/\nBatch completed with[\s\S]*$/, "")
-        .replace(/^ERROR:\s*/, "")
-        .trim();
+      const correlationId = typeof metadata.id === "string"
+        ? metadata.id
+        : null;
+      const tool = String(metadata.tool || "");
+      const label = correlationId === null
+        ? tool
+        : `${tool} · ${correlationId}`;
+      const header = `--- [${position + 1}: ${label}] ---\n`;
+      if (text.slice(cursor, cursor + header.length) !== header) {
+        break;
+      }
+      cursor += header.length;
+      if (metadata.success !== true) {
+        const errorPrefix = "ERROR: ";
+        if (text.slice(cursor, cursor + errorPrefix.length) !== errorPrefix) {
+          break;
+        }
+        cursor += errorPrefix.length;
+      }
+      const outputBytes = Number(metadata.output_bytes);
+      const prefix = utf8Prefix(text.slice(cursor), outputBytes);
+      sections[position] = {
+        output: prefix.text,
+        complete: prefix.complete,
+      };
+      cursor += prefix.code_units;
+      if (!prefix.complete) {
+        break;
+      }
+      if (text.slice(cursor, cursor + 2) === "\r\n") {
+        cursor += 2;
+      } else if (text[cursor] === "\n") {
+        cursor += 1;
+      } else {
+        break;
+      }
     }
     return sections;
   };
@@ -188,21 +277,25 @@ async function run(ctx, inputs) {
       ? batch.metadata.results
       : [];
     const metadata = results.find((item) => Number(item && item.index) === index);
-    const output = sections[index] || "";
+    const section = sections[index] || { output: "", complete: false };
+    const output = section.output;
+    const childMetadata = object(metadata && metadata.metadata);
+    const childArtifact = object(childMetadata.artifact);
     const outputBytes = Number(metadata && metadata.output_bytes);
     const outputTruncated = Boolean(
       metadata &&
       metadata.success === true &&
       Number.isSafeInteger(outputBytes) &&
       outputBytes > 0 &&
-      (!nonEmpty(output) || /\[tool output truncated:/i.test(output))
+      (
+        artifactIsTruncated(childArtifact) ||
+        section.complete !== true
+      )
     );
     return {
-      success: metadata
-        ? metadata.success === true
-        : Boolean(batch && toolExitCode(batch) === 0 && nonEmpty(output)),
+      success: metadata ? metadata.success === true : false,
       output,
-      metadata: object(metadata && metadata.metadata),
+      metadata: childMetadata,
       error_kind: metadata && metadata.error_kind,
       output_truncated: outputTruncated,
     };
@@ -218,7 +311,7 @@ async function run(ctx, inputs) {
         Math.min(maximumConcurrency, invocations.length)
       ),
     });
-    const sections = batchSections(batch && batch.output, invocations.length);
+    const sections = batchSections(batch, invocations.length);
     return {
       batch,
       children: invocations.map((_invocation, index) =>
@@ -281,10 +374,7 @@ async function run(ctx, inputs) {
         }))
         .filter((item) => item.url);
     } catch (_error) {
-      return uniqueStrings(text.match(/https?:\/\/[^\s<>"']+/g) || [])
-        .map(cleanUrl)
-        .filter(Boolean)
-        .map((url) => ({ title: "", url, date: "", engines: [] }));
+      return [];
     }
   };
   const documentRange = (metadata) => {
@@ -300,6 +390,10 @@ async function run(ctx, inputs) {
       return null;
     }
     const range = object(rawRange);
+    const returnedChars = Number(range.returned_chars);
+    if (!Number.isSafeInteger(returnedChars) || returnedChars < 0) {
+      return null;
+    }
     const nextOffset = range.next_offset === null || range.next_offset === undefined
       ? null
       : Number(range.next_offset);
@@ -313,7 +407,15 @@ async function run(ctx, inputs) {
     if (eof !== (nextOffset === null)) {
       return null;
     }
-    return { offset, next_offset: nextOffset, eof };
+    if (nextOffset !== null && nextOffset !== offset + returnedChars) {
+      return null;
+    }
+    return {
+      offset,
+      returned_chars: returnedChars,
+      next_offset: nextOffset,
+      eof,
+    };
   };
   const extractedDocument = (metadata) => {
     const kind = String(metadata && metadata.document_kind || "").toLowerCase();
@@ -321,13 +423,146 @@ async function run(ctx, inputs) {
     return kind === "pdf" || kind === "document" ||
       /^application\/pdf(?:;|$)/.test(contentType);
   };
-  const cleanFetchedText = (value, document) => {
-    const text = String(value || "")
-      .replace(/\r\n?/g, "\n")
+  const serializedContainerPrefixEnd = (line) => {
+    const start = line.search(/\S/);
+    if (start < 0 || !["{", "["].includes(line[start])) {
+      return null;
+    }
+    const closers = [];
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < line.length; index += 1) {
+      const character = line[index];
+      if (quoted) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === "\"") {
+          quoted = false;
+        }
+        continue;
+      }
+      if (character === "\"") {
+        quoted = true;
+        continue;
+      }
+      if (character === "{" || character === "[") {
+        closers.push(character === "{" ? "}" : "]");
+        continue;
+      }
+      if (character === "}" || character === "]") {
+        if (closers.pop() !== character) {
+          return null;
+        }
+        if (closers.length === 0) {
+          return { start, end: index + 1 };
+        }
+      }
+    }
+    return null;
+  };
+  const stripOversizedSerializedPrefix = (value) =>
+    String(value || "")
+      .split("\n")
+      .map((line) => {
+        const prefix = serializedContainerPrefixEnd(line);
+        if (
+          !prefix ||
+          prefix.end - prefix.start <= MAX_CHUNK_CHARS
+        ) {
+          return line;
+        }
+        const suffix = line.slice(prefix.end).trimStart();
+        if (Array.from(suffix).length < 30) {
+          return line;
+        }
+        return `${line.slice(0, prefix.start)}${suffix}`;
+      })
+      .join("\n");
+  const decodeEscapedCodeUnits = (value) =>
+    String(value || "")
+      .replace(/\\+u([0-9a-fA-F]{4})/g, (_match, digits) =>
+        String.fromCharCode(Number.parseInt(digits, 16))
+      )
+      .replace(/\\+n/g, "\n")
+      .replace(/\\+r/g, "\n")
+      .replace(/\\+t/g, " ")
+      .replace(/\\+"/g, "\"");
+  const visibleTextFromSerializedMarkup = (line) => {
+    const start = line.search(/\S/);
+    if (
+      start < 0 ||
+      !["{", "["].includes(line[start]) ||
+      Array.from(line).length <= MAX_CHUNK_CHARS
+    ) {
+      return "";
+    }
+    const decoded = decodeEscapedCodeUnits(line);
+    const markupStart = decoded.indexOf("<");
+    const markupEnd = decoded.lastIndexOf(">");
+    if (markupStart < 0 || markupEnd <= markupStart) {
+      return "";
+    }
+    const visible = decoded
+      .slice(markupStart, markupEnd + 1)
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "\n")
       .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "\n")
       .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "\n")
-      .replace(/\n*\.\.\. \(more fetched content available; continue with offset=\d+\)\s*/gi, "\n");
+      .replace(/<br\b[^>]*>/gi, "\n")
+      .replace(/<\/[^>]+>/g, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&#x([0-9a-fA-F]+);/g, (entity, digits) => {
+        const codePoint = Number.parseInt(digits, 16);
+        return codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      })
+      .replace(/&#([0-9]+);/g, (entity, digits) => {
+        const codePoint = Number.parseInt(digits, 10);
+        return codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      })
+      .replace(/&(amp|lt|gt|quot|apos);/g, (_entity, name) => ({
+        amp: "&",
+        lt: "<",
+        gt: ">",
+        quot: "\"",
+        apos: "'",
+      })[name])
+      .replace(/[ \t]+/g, " ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return Array.from(visible).length >= 30 ? visible : "";
+  };
+  const structurallyVisibleFetchedText = (value) =>
+    stripOversizedSerializedPrefix(value)
+      .split("\n")
+      .map((line) => visibleTextFromSerializedMarkup(line) || line)
+      .join("\n");
+  const cleanFetchedText = (value, returnedChars) => {
+    const characters = Array.from(String(value || ""));
+    if (
+      !Number.isSafeInteger(returnedChars) ||
+      returnedChars <= 0 ||
+      characters.length < returnedChars
+    ) {
+      return "";
+    }
+    // Only serialization shape, balanced delimiters, and byte budgets decide
+    // whether hidden transport state is unwrapped. No query, host, language,
+    // publisher, path, or vocabulary participates in this boundary.
+    const text = structurallyVisibleFetchedText(
+      characters
+        .slice(0, returnedChars)
+        .join("")
+        .replace(/\r\n?/g, "\n")
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "\n")
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "\n")
+        .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "\n")
+    );
     const seen = new Set();
     return text
       .split(/\n+/)
@@ -351,14 +586,12 @@ async function run(ctx, inputs) {
   };
   const transientFetchFailure = (child) => {
     const errorKind = child && child.error_kind;
-    const kind = typeof errorKind === "string"
-      ? errorKind
-      : String(errorKind && errorKind.type || "");
+    const kind = errorKind && typeof errorKind === "object"
+      ? errorKind.type
+      : null;
     return Boolean(
       child &&
-      ["network", "timeout", "transport"].includes(
-        kind.toLowerCase()
-      )
+      (kind === "timeout" || kind === "transport")
     );
   };
 
@@ -368,31 +601,17 @@ async function run(ctx, inputs) {
     .filter((line) => Array.from(line).length >= 12);
   const splitLongText = (value) => {
     const characters = Array.from(String(value || ""));
-    if (characters.length <= MAX_CHUNK_CHARS) {
-      return [characters.join("")];
-    }
     const chunks = [];
-    let offset = 0;
-    while (offset < characters.length) {
-      const maximumEnd = Math.min(characters.length, offset + MAX_CHUNK_CHARS);
-      let end = maximumEnd;
-      if (maximumEnd < characters.length) {
-        const minimumEnd = offset + Math.floor(MAX_CHUNK_CHARS * 0.65);
-        for (let cursor = maximumEnd - 1; cursor >= minimumEnd; cursor -= 1) {
-          if (/[\s.,;:!?…。，；：！？]/u.test(characters[cursor])) {
-            end = cursor + 1;
-            break;
-          }
-        }
-      }
-      const chunk = characters.slice(offset, end).join("").trim();
+    for (let offset = 0; offset < characters.length; offset += MAX_CHUNK_CHARS) {
+      // Chunk boundaries are positional transport budgets. They never inspect
+      // punctuation, words, language, script, entities, or topic vocabulary.
+      const chunk = characters
+        .slice(offset, offset + MAX_CHUNK_CHARS)
+        .join("")
+        .trim();
       if (chunk) {
         chunks.push(chunk);
       }
-      if (end >= characters.length) {
-        break;
-      }
-      offset = Math.max(offset + 1, end - 50);
     }
     return chunks;
   };
@@ -487,14 +706,23 @@ async function run(ctx, inputs) {
       };
     }).filter((item) => item.obligation_id && item.focus);
   };
-  const webEvidencePacket = (plan, fetched, sourcePrefix) => {
+  const webEvidencePacket = (
+    plan,
+    fetched,
+    sourcePrefix,
+    sourceIndexOffset
+  ) => {
     const focuses = planFocuses(plan);
     const prefix = nonEmpty(sourcePrefix) ? sourcePrefix : "web-source";
+    const indexOffset = Number.isSafeInteger(sourceIndexOffset) &&
+        sourceIndexOffset >= 0
+      ? sourceIndexOffset
+      : 0;
     const candidates = fetched
       .filter((item) => item.ok && substantive(item.text))
       .slice(0, MAX_SOURCES)
       .map((item, index) => {
-        const sourceId = `${prefix}-${index + 1}`;
+        const sourceId = `${prefix}-${indexOffset + index + 1}`;
         const chunks = sourceChunks(
           structuredFeedSegments(item.segments || [item.text]),
           sourceId

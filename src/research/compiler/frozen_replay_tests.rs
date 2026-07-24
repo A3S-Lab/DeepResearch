@@ -1,4 +1,4 @@
-use super::frozen_fixture::{load_frozen_replays, FrozenReplay};
+use super::frozen_fixture::{load_frozen_replays, FrozenFault, FrozenReplay};
 use super::*;
 
 fn replay(case_id: &str) -> FrozenReplay {
@@ -103,10 +103,11 @@ fn f02_keeps_the_reproducible_derivation_and_benchmark_boundary() {
 #[test]
 fn f03_rejects_only_the_malformed_beta_claim_and_retains_alpha() {
     let replay = replay("F03");
-    assert_eq!(replay.fault_stage.as_deref(), Some("evidence_extraction"));
     assert_eq!(
-        replay.fault_mode.as_deref(),
-        Some("malformed_target_result")
+        replay.fault,
+        Some(FrozenFault::MalformedEvidenceExtraction {
+            dimension_id: "beta-support".to_string(),
+        })
     );
     let ledger = admitted(&replay);
     let document =
@@ -166,8 +167,7 @@ fn f05_keeps_prompt_injection_as_source_data_not_a_document_claim() {
 #[test]
 fn f06_report_timeout_selects_a_source_backed_document_without_evidence_loss() {
     let replay = replay("F06");
-    assert_eq!(replay.fault_stage.as_deref(), Some("report_generation"));
-    assert_eq!(replay.fault_mode.as_deref(), Some("timeout"));
+    assert_eq!(replay.fault, Some(FrozenFault::ReportGenerationTimeout));
 
     let document =
         build_source_backed_document(&replay.contract, &replay.catalog).expect("F06 fallback");

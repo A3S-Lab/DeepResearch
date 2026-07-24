@@ -350,18 +350,13 @@ fn normalize_evidence(
     let claims = string_array(value.get("key_evidence"), 32)
         .into_iter()
         .map(|text| AcceptedClaim {
-            // Preserve the historical 350-character claim identity while
-            // retaining the longer ledger text for reasoning and reports.
-            id: stable_id(
-                "claim",
-                &super::deep_research_digest_text(&text, 350).to_ascii_lowercase(),
-            ),
+            id: stable_id("claim", &text),
             text,
         })
         .collect::<Vec<_>>();
     let evidence_key = format!(
         "{}|{}",
-        summary.to_ascii_lowercase(),
+        summary,
         sources
             .iter()
             .map(|source| source.id.as_str())
@@ -543,12 +538,7 @@ fn accepted_source_excerpts(
             let quote_or_fact = string_field(excerpt, "quote_or_fact")
                 .or_else(|| string_field(excerpt, "excerpt"))
                 .or_else(|| string_field(excerpt, "fact"))?;
-            let identity = format!(
-                "{}|{}|{}",
-                source_id,
-                focus.to_ascii_lowercase(),
-                quote_or_fact.to_ascii_lowercase()
-            );
+            let identity = format!("{}|{}|{}", source_id, focus, quote_or_fact);
             let id = stable_id("excerpt", &identity);
             seen.insert(id.clone()).then_some(AcceptedSourceExcerpt {
                 id,

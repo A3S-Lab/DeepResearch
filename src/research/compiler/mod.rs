@@ -9,7 +9,8 @@ mod render;
 pub use api::{
     compile_evidence_report, evidence_source_content_digest, evidence_spec_digest,
     validate_evidence_catalog, validate_evidence_contract, CompiledEvidenceReport,
-    CompilerCoverage, CompilerRejection, EvidenceCompilerError, EvidenceCompilerOutcome,
+    CompilerClaimKind, CompilerClaimPlacement, CompilerClaimSupport, CompilerCoverage,
+    CompilerRejection, CompilerStructuralCoverage, EvidenceCompilerError, EvidenceCompilerOutcome,
 };
 
 use catalog::*;
@@ -21,6 +22,8 @@ use render::*;
 
 #[cfg(test)]
 mod catalog_tests;
+#[cfg(test)]
+mod engine_replay_tests;
 #[cfg(test)]
 mod frozen_fixture;
 #[cfg(test)]

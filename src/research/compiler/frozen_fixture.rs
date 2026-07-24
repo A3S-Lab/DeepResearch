@@ -5,12 +5,17 @@ use std::path::{Path, PathBuf};
 pub(super) struct FrozenReplay {
     pub(super) id: String,
     pub(super) required_behaviors: Vec<String>,
-    pub(super) fault_stage: Option<String>,
-    pub(super) fault_mode: Option<String>,
+    pub(super) fault: Option<FrozenFault>,
     pub(super) contract: ResearchContract,
     pub(super) catalog: SourceCatalog,
     pub(super) proposal: ClaimLedgerProposal,
     pub(super) forbidden_statements: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum FrozenFault {
+    MalformedEvidenceExtraction { dimension_id: String },
+    ReportGenerationTimeout,
 }
 
 struct FixtureCase {
@@ -37,6 +42,7 @@ struct FixtureSource {
     url: String,
     requested_url: Option<String>,
     path: String,
+    transport: AcquisitionTransport,
     authority: String,
     captured_at: String,
 }
@@ -102,6 +108,7 @@ fn parse_case(block: &Block) -> FixtureCase {
                 url: string(source, "url"),
                 requested_url: optional_string(source, "requested_url"),
                 path: string(source, "path"),
+                transport: acquisition_transport(source),
                 authority: string(source, "authority"),
                 captured_at: string(source, "captured_at"),
             })
@@ -139,6 +146,26 @@ fn parse_case(block: &Block) -> FixtureCase {
 }
 
 fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
+    let fault =
+        case.fault
+            .as_ref()
+            .map(|fault| match (fault.stage.as_str(), fault.mode.as_str()) {
+                ("evidence_extraction", "malformed_target_result") => {
+                    FrozenFault::MalformedEvidenceExtraction {
+                        dimension_id: fault.target.clone().unwrap_or_else(|| {
+                            panic!(
+                                "{}: malformed evidence-extraction fault needs a target",
+                                case.id
+                            )
+                        }),
+                    }
+                }
+                ("report_generation", "timeout") => FrozenFault::ReportGenerationTimeout,
+                (stage, mode) => panic!(
+                    "{}: unsupported frozen fault protocol `{stage}` / `{mode}`",
+                    case.id
+                ),
+            });
     let source_targets = case
         .sources
         .iter()
@@ -246,10 +273,9 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
     validate_source_catalog(&contract, &catalog)
         .unwrap_or_else(|error| panic!("{}: compile frozen catalog: {error}", case.id));
 
-    let malformed_dimension = case.fault.as_ref().and_then(|fault| {
-        (fault.mode == "malformed_target_result")
-            .then(|| fault.target.clone())
-            .flatten()
+    let malformed_dimension = fault.as_ref().and_then(|fault| match fault {
+        FrozenFault::MalformedEvidenceExtraction { dimension_id } => Some(dimension_id.as_str()),
+        FrozenFault::ReportGenerationTimeout => None,
     });
     let claims = active_claims(&case)
         .map(|claim| {
@@ -268,13 +294,13 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
                     .iter()
                     .map(|source_id| ClaimEvidenceRef {
                         source_id: source_id.clone(),
-                        chunk_ids: vec![if malformed_dimension.as_deref()
-                            == Some(claim.dimension_id.as_str())
-                        {
-                            format!("{source_id}:chunk:missing")
-                        } else {
-                            chunk_id(source_id)
-                        }],
+                        chunk_ids: vec![
+                            if malformed_dimension == Some(claim.dimension_id.as_str()) {
+                                format!("{source_id}:chunk:missing")
+                            } else {
+                                chunk_id(source_id)
+                            },
+                        ],
                     })
                     .collect(),
                 basis_claim_ids: claim.basis.clone(),
@@ -315,8 +341,7 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
     FrozenReplay {
         id: case.id,
         required_behaviors: case.required_behaviors,
-        fault_stage: case.fault.as_ref().map(|fault| fault.stage.clone()),
-        fault_mode: case.fault.as_ref().map(|fault| fault.mode.clone()),
+        fault,
         contract,
         catalog,
         proposal: ClaimLedgerProposal {
@@ -360,11 +385,7 @@ fn active_claims(case: &FixtureCase) -> impl Iterator<Item = &FixtureClaim> {
 }
 
 fn source_transport(source: &FixtureSource) -> AcquisitionTransport {
-    if source.url.starts_with("local://") {
-        AcquisitionTransport::Workspace
-    } else {
-        AcquisitionTransport::Web
-    }
+    source.transport
 }
 
 fn source_identity(source: &FixtureSource) -> SourceIdentity {
@@ -378,6 +399,17 @@ fn source_role(authority: &str) -> SourceRole {
     match authority {
         "primary" | "local_primary" => SourceRole::Primary,
         value => panic!("unknown frozen source authority `{value}`"),
+    }
+}
+
+fn acquisition_transport(source: &Block) -> AcquisitionTransport {
+    match string(source, "transport").as_str() {
+        "web" => AcquisitionTransport::Web,
+        "workspace" => AcquisitionTransport::Workspace,
+        value => panic!(
+            "{} {:?} has unsupported transport `{value}`",
+            source.name, source.labels
+        ),
     }
 }
 

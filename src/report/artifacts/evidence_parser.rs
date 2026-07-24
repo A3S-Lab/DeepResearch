@@ -10,9 +10,6 @@ pub fn parse_embedded_structured_evidence_json(text: &str) -> Option<serde_json:
             return Some(value);
         }
     }
-    if !(trimmed.contains("\"summary\"") && trimmed.contains("\"sources\"")) {
-        return None;
-    }
     for (start, ch) in trimmed.char_indices() {
         if !matches!(ch, '{' | '[') {
             continue;
@@ -64,4 +61,32 @@ fn balanced_json_end(text: &str, start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_embedded_structured_evidence_json;
+
+    #[test]
+    fn embedded_json_is_recognized_by_syntax_not_field_vocabulary() {
+        let parsed = parse_embedded_structured_evidence_json(
+            "provider prefix\n{\"opaque_envelope\":{\"arbitrary_field\":7}}\nprovider suffix",
+        )
+        .expect("balanced JSON object");
+
+        assert_eq!(
+            parsed,
+            serde_json::json!({"opaque_envelope": {"arbitrary_field": 7}})
+        );
+    }
+
+    #[test]
+    fn schema_words_without_a_json_value_do_not_create_an_envelope() {
+        assert_eq!(
+            parse_embedded_structured_evidence_json(
+                "The transport printed \"summary\" and \"sources\" but no JSON value."
+            ),
+            None
+        );
+    }
 }

@@ -19,7 +19,7 @@ pub fn materialize_deep_research_completed_report_from_generation(
         workflow_output,
         workflow_metadata,
     );
-    let html = deep_research_completed_report_html_with_presentation(
+    let raw_html = deep_research_completed_report_html_with_presentation(
         query,
         &markdown,
         Some(&generated.presentation),
@@ -27,11 +27,14 @@ pub fn materialize_deep_research_completed_report_from_generation(
     );
     validate_deep_research_completed_report_content(
         &markdown,
-        &html,
+        &raw_html,
         query,
         workflow_output,
         workflow_metadata,
     )?;
+    let markdown =
+        markdown_with_artifact_kind(&markdown, DeepResearchArtifactKind::Synthesized)?;
+    let html = html_with_artifact_kind(&raw_html, DeepResearchArtifactKind::Synthesized)?;
 
     let slug = deep_research_report_slug(query);
     let (root, report_dir) = prepare_research_report_directory(workspace, &slug)?;

@@ -3,7 +3,10 @@ const COMPREHENSIVE_REPORT_MIN_CLAIMS: usize = 5;
 const COMPREHENSIVE_REPORT_MIN_CITED_SOURCES: usize = 2;
 const COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS: usize = 480;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum DeepResearchReportScope {
     #[default]
     Focused,
@@ -184,8 +187,8 @@ fn deep_research_report_depth_requirements(
         },
         DeepResearchReportScope::Focused => DeepResearchReportDepthRequirements {
             minimum_direct_answers: 1,
-            minimum_findings: 1,
-            minimum_claims: 2,
+            minimum_findings: 0,
+            minimum_claims: 1,
             minimum_cited_sources: 1,
             minimum_substantive_characters: 0,
         },

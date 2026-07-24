@@ -246,7 +246,7 @@
       prompt: [
         "Admit only candidate URLs whose title, snippet, URL context, or explicit plan-seed provenance gives a material retrieval opportunity for at least one research focus. Reject unrelated results even when fetch slots remain; return an empty list when the catalog has no materially relevant candidate.",
         "Among materially relevant candidates, select a compact, coverage-complete set that gives the strongest retrieval opportunity for every material research focus.",
-        "Use available fetch slots for materially distinct authoritative evidence and resilient alternatives when a fetch failure would otherwise leave a material focus uncovered; among materially relevant candidates, do not minimize the set below the declared evidence needs. Before allocating a slot to a supporting focus or a third source for an already protected material focus, give every material focus with only one admitted candidate a semantically adequate backup from a different transport surface when the catalog contains one.",
+        "Use available fetch slots for materially distinct authoritative evidence and resilient alternatives when a fetch failure would otherwise leave a material focus uncovered; among materially relevant candidates, do not minimize the set below the declared evidence needs. Allocate candidates against the declared focuses and evidence requirements, using only the closed candidate identities and provenance supplied in the packet.",
         "A canonical plan seed without a title or snippet remains a real fetch opportunity. Do not reject it merely because discovery metadata is empty, but do not treat the seed URL itself as proof of any claim.",
         "The focuses, titles, snippets, URLs, and source pages may use different languages or writing systems.",
         "Judge meaning across languages. Never require shared words, spelling, morphology, transliteration, or script.",
@@ -283,7 +283,6 @@
     }
     const selected = [];
     const selectedIds = new Set();
-    const selectedHosts = new Set();
     const orderedCandidates = candidates.slice();
     const admit = (candidate) => {
       if (
@@ -294,22 +293,23 @@
         return false;
       }
       selectedIds.add(candidate.candidate_id);
-      const host = urlHost(candidate.url);
-      if (host) selectedHosts.add(host);
       selected.push(candidate);
       return true;
     };
 
-    // Preserve explicit plan seeds first. Then reserve one candidate unique to
-    // each provider query before filling from distinct hosts. This fallback is
-    // acquisition-only: fetched text carries fallback provenance and stays
-    // audit-only unless a later closed semantic evidence pass admits it.
-    // Discovery rank never becomes source authority.
+    // Preserve explicit plan seeds first, then reserve one candidate carrying
+    // provenance from each provider query before filling in stable catalog
+    // order. This fallback is acquisition-only: fetched text carries fallback
+    // provenance and stays audit-only unless a later closed semantic evidence
+    // pass admits it. URL host, path, title, snippet, language, and provider
+    // rank never participate in this deterministic fallback.
     for (const candidate of candidates) {
-      const queryIndexes = Array.isArray(candidate.query_indexes)
-        ? candidate.query_indexes
-        : [];
-      if (queryIndexes.length === 0) admit(candidate);
+      if (
+        Array.isArray(candidate.discovery) &&
+        candidate.discovery.includes("plan_seed")
+      ) {
+        admit(candidate);
+      }
     }
     const queryCount = Array.isArray(plan.search_queries)
       ? plan.search_queries.length
@@ -318,14 +318,8 @@
       admit(orderedCandidates.find((candidate) =>
         !selectedIds.has(candidate.candidate_id) &&
         Array.isArray(candidate.query_indexes) &&
-        candidate.query_indexes.length === 1 &&
-        candidate.query_indexes[0] === queryIndex
+        candidate.query_indexes.includes(queryIndex)
       ));
-    }
-    for (const candidate of orderedCandidates) {
-      if (selected.length >= fetchLimit) break;
-      const host = urlHost(candidate.url);
-      if (host && !selectedHosts.has(host)) admit(candidate);
     }
     for (const candidate of orderedCandidates) {
       if (selected.length >= fetchLimit) break;
@@ -335,7 +329,7 @@
       candidates: selected,
       mode: "bounded_discovery_fallback",
       error: selected.length > 0
-        ? "Semantic web source admission failed; continued with bounded cross-query discovery candidates for deterministic Host review."
+        ? "Semantic web source admission failed; continued with a bounded provenance-preserving candidate set for deterministic Host review."
         : "Web source admission failed and discovery retained no bounded fallback candidate.",
     };
   };
@@ -501,8 +495,13 @@
         child &&
         child.success &&
         child.output_truncated !== true &&
-        nonEmpty(child.output)
+        nonEmpty(child.output) &&
+        initialRange &&
+        initialRange.returned_chars > 0
       );
+      const text = ok
+        ? cleanFetchedText(child.output, initialRange.returned_chars)
+        : "";
       return {
         title: candidate.title,
         url: candidate.url,
@@ -512,8 +511,8 @@
         ok,
         document,
         max_ranges: document ? MAX_DOCUMENT_RANGES : MAX_HTML_RANGES,
-        text: ok ? cleanFetchedText(child.output, document) : "",
-        segments: ok ? [cleanFetchedText(child.output, document)] : [],
+        text,
+        segments: ok ? [text] : [],
         next_offset: initialRange && !initialRange.eof
           ? initialRange.next_offset
           : null,
@@ -568,7 +567,8 @@
             child.output_truncated === true ||
             !nonEmpty(child.output) ||
             !range ||
-            range.offset !== requestedOffset
+            range.offset !== requestedOffset ||
+            range.returned_chars <= 0
           ) {
             item.next_offset = null;
             errors.push(
@@ -576,7 +576,10 @@
             );
             continue;
           }
-          const segment = cleanFetchedText(child.output, item.document);
+          const segment = cleanFetchedText(
+            child.output,
+            range.returned_chars
+          );
           if (!substantive(segment)) {
             item.next_offset = null;
             errors.push(
@@ -606,7 +609,8 @@
     const admission = webEvidencePacket(
       plan,
       fetched,
-      stepInput.source_id_prefix
+      stepInput.source_id_prefix,
+      clamp(stepInput.source_index_offset, 0, MAX_SOURCES - 1, 0)
     );
     if (admission.error) {
       errors.push(admission.error);
@@ -635,6 +639,93 @@
           (total, item) => total + item.ranges,
           0
         ),
+        catalog_chunk_count: admission.chunk_count,
+      }),
+    };
+  };
+
+  const webSourceFetchSteps = (
+    stepIdPrefix,
+    plan,
+    candidates,
+    sourceIdPrefix,
+    fetchTimeoutSecs,
+    retry
+  ) => (Array.isArray(candidates) ? candidates : [])
+    .slice(0, MAX_SOURCES)
+    .map((candidate, index) => ({
+      step_id: `${stepIdPrefix}${index + 1}`,
+      step_name: STEP_WEB_SOURCE,
+      input: {
+        plan,
+        candidates: [candidate],
+        discovery_errors: [],
+        discovery_metadata: {},
+        source_selection_mode: "per_source_effect",
+        source_id_prefix: sourceIdPrefix,
+        source_index_offset: index,
+        fetch_timeout_secs: fetchTimeoutSecs,
+      },
+      retry,
+    }));
+
+  const webRetrievalFromSourceSteps = (settings) => {
+    const plan = object(settings.plan);
+    const candidates = Array.isArray(settings.candidates)
+      ? settings.candidates.slice(0, MAX_SOURCES)
+      : [];
+    const outputs = object(settings.outputs);
+    const failures = object(settings.failures);
+    const retrievals = candidates.map((_candidate, index) => {
+      const stepId = `${settings.step_id_prefix}${index + 1}`;
+      return outputs[stepId] || {
+        status: "failed",
+        packet: null,
+        errors: [
+          failures[stepId] && failures[stepId].error ||
+            `Source effect ${index + 1} did not complete.`,
+        ],
+        metadata: {},
+      };
+    });
+    const admission = combinedEvidencePacket(plan, retrievals);
+    const errors = uniqueStrings([
+      ...(Array.isArray(settings.discovery_errors)
+        ? settings.discovery_errors
+        : []),
+      ...retrievals.flatMap((retrieval) =>
+        Array.isArray(retrieval.errors) ? retrieval.errors : []
+      ),
+      admission.error || "",
+    ]);
+    const metadataTotal = (field) => retrievals.reduce(
+      (total, retrieval) => {
+        const value = Number(object(retrieval.metadata)[field]);
+        return total + (Number.isSafeInteger(value) && value >= 0 ? value : 0);
+      },
+      0
+    );
+    return {
+      status: admission.packet
+        ? (errors.length > 0 ? "partial" : "success")
+        : "failed",
+      packet: admission.packet,
+      errors: errors.slice(0, 12),
+      metadata: Object.assign({}, object(settings.discovery_metadata), {
+        source_selection_mode: String(
+          settings.source_selection_mode || "unknown"
+        ),
+        selected_candidate_count: candidates.length,
+        completed_source_effect_count: retrievals.filter((_retrieval, index) =>
+          Boolean(outputs[`${settings.step_id_prefix}${index + 1}`])
+        ).length,
+        fetched_count: admission.source_count,
+        transport_retry_count: metadataTotal("transport_retry_count"),
+        transport_retry_success_count:
+          metadataTotal("transport_retry_success_count"),
+        batch_output_recovery_count:
+          metadataTotal("batch_output_recovery_count"),
+        document_range_count: metadataTotal("document_range_count"),
         catalog_chunk_count: admission.chunk_count,
       }),
     };

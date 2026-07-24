@@ -174,7 +174,9 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
         // Unknown semantic scope fails toward the stronger publication gate.
         // This is a safety default, not a topic classification.
         "research_scope": "comprehensive",
-        "freshness_required": false,
+        // Unknown temporal requirements likewise fail toward the stronger
+        // evidence contract instead of authorizing an undated final answer.
+        "freshness_required": true,
         "workspace_evidence_required": local_only,
         "tracks": [{
             "id": "request.primary",

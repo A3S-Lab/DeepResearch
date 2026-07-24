@@ -294,6 +294,8 @@ body.stance-bold .rhythm-anchor > h2 { max-width:28ch; font-size:clamp(2.3rem,4.
   body.density-compact main, body.density-spacious main, main { max-width: none; padding: 20px 0 0; }
   .report-shell { display: block; }
   .rail { display: none; }
+  article, .report-section, .section-body { width: 100%; max-width: 100%; min-width: 0; }
+  .rhythm-breathing, body.stance-shifted .rhythm-breathing { width: 100%; margin-left: 0; margin-right: 0; }
   .report-section { break-inside: auto; margin-bottom: 28px; box-shadow: none; }
   body.density-compact .report-section:last-child, body.density-spacious .report-section:last-child, .report-section:last-child { margin-bottom:0; }
   .section--summary, .composition-comparison, .section--caveats, .section--confidence { padding: 16px 0; border: 0; background: #fff; color: #000; }
@@ -304,6 +306,7 @@ body.stance-bold .rhythm-anchor > h2 { max-width:28ch; font-size:clamp(2.3rem,4.
   .composition-source-ledger .section-body > ul > li { padding:10px 12px 10px 44px; break-inside:avoid; background:transparent; }
   .composition-source-ledger .section-body > ul > li::before { left:12px; top:11px; }
   h2, h3 { break-after: avoid; }
+  ol { padding-left: 2.2rem; }
   a { color: #000; text-decoration: underline; }
   .table-wrap { overflow: visible; border: 1px solid #777; box-shadow: none; }
   table { min-width: 0; }

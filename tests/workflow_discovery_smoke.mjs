@@ -38,13 +38,18 @@ async function discover(searchOutput) {
     async tool(name, request) {
       assert.equal(name, "batch");
       assert.equal(request.invocations.length, 1);
+      const invocation = request.invocations[0];
+      const outputBytes = new TextEncoder().encode(searchOutput).byteLength;
       return {
-        output: `--- [1:search-1] ---\n${searchOutput}`,
+        output: `--- [1: ${invocation.tool} · ${invocation.id}] ---\n${searchOutput}\n`,
         metadata: {
           results: [
             {
               index: 0,
+              id: invocation.id,
+              tool: invocation.tool,
               success: true,
+              output_bytes: outputBytes,
               metadata: {
                 selected_engines: ["test-provider"],
                 engine_selection_source: "test",
@@ -93,9 +98,5 @@ assert.equal(
 const unstructured = await discover(
   "https://three.example.test/record?format=full",
 );
-assert.equal(unstructured.status, "success");
-assert.equal(unstructured.candidates.length, 1);
-assert.equal(
-  unstructured.candidates[0].url,
-  "https://three.example.test/record?format=full",
-);
+assert.equal(unstructured.status, "failed");
+assert.equal(unstructured.candidates.length, 0);

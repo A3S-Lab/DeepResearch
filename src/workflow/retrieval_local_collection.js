@@ -206,15 +206,17 @@
       const sourceAnchors = Array.isArray(metadata.source_anchors)
         ? metadata.source_anchors.map(normalizeLocalPath)
         : [];
+      const returnedLines = Number(range.returned_lines);
       const text = child && child.success
-        ? cleanLocalReadText(child.output)
+        ? cleanLocalReadText(child.output, requested.offset, returnedLines)
         : "";
       if (
         !child ||
         !child.success ||
         !text ||
         Number(range.offset) !== requested.offset ||
-        Number(range.returned_lines) <= 0 ||
+        !Number.isSafeInteger(returnedLines) ||
+        returnedLines <= 0 ||
         !sourceAnchors.includes(requested.path)
       ) {
         errors.push(

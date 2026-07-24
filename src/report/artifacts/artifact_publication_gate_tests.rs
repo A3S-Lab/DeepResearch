@@ -485,3 +485,223 @@ fn recovery_report_preflights_both_targets_before_replacing_either_file() {
 
     let _ = std::fs::remove_dir_all(&workspace);
 }
+
+#[test]
+fn report_pair_recovery_rolls_back_an_interrupted_partial_generation() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let report_dir = workspace.path().join(".a3s/research/interrupted-pair");
+    std::fs::create_dir_all(&report_dir).unwrap();
+    let markdown_path = report_dir.join("report.md");
+    let html_path = report_dir.join("index.html");
+    std::fs::write(&markdown_path, b"previous markdown").unwrap();
+    std::fs::write(&html_path, b"previous html").unwrap();
+
+    simulate_research_report_pair_interruption_for_test(
+        &markdown_path,
+        b"replacement markdown",
+        &html_path,
+        b"replacement html",
+        ResearchReportPairInterruption::AfterMarkdownReplacement,
+    )
+    .expect("simulate an interruption after the first replacement");
+
+    assert_eq!(
+        std::fs::read(&markdown_path).unwrap(),
+        b"replacement markdown"
+    );
+    assert_eq!(std::fs::read(&html_path).unwrap(), b"previous html");
+
+    recover_research_report_pair(&markdown_path, &html_path)
+        .expect("restart recovery must restore the previous complete generation");
+
+    assert_eq!(std::fs::read(&markdown_path).unwrap(), b"previous markdown");
+    assert_eq!(std::fs::read(&html_path).unwrap(), b"previous html");
+    assert_eq!(
+        std::fs::read_dir(&report_dir).unwrap().count(),
+        2,
+        "successful recovery must remove the journal and transaction files"
+    );
+}
+
+#[test]
+fn report_pair_recovery_commits_a_fully_replaced_generation() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let report_dir = workspace.path().join(".a3s/research/committed-pair");
+    std::fs::create_dir_all(&report_dir).unwrap();
+    let markdown_path = report_dir.join("report.md");
+    let html_path = report_dir.join("index.html");
+    std::fs::write(&markdown_path, b"previous markdown").unwrap();
+    std::fs::write(&html_path, b"previous html").unwrap();
+
+    simulate_research_report_pair_interruption_for_test(
+        &markdown_path,
+        b"replacement markdown",
+        &html_path,
+        b"replacement html",
+        ResearchReportPairInterruption::AfterHtmlReplacement,
+    )
+    .expect("simulate an interruption after both replacements");
+
+    recover_research_report_pair(&markdown_path, &html_path)
+        .expect("restart recovery must recognize the complete new generation");
+
+    assert_eq!(
+        std::fs::read(&markdown_path).unwrap(),
+        b"replacement markdown"
+    );
+    assert_eq!(std::fs::read(&html_path).unwrap(), b"replacement html");
+    assert_eq!(
+        std::fs::read_dir(&report_dir).unwrap().count(),
+        2,
+        "successful recovery must remove the journal and transaction files"
+    );
+}
+
+#[test]
+fn report_resolution_recovers_an_interrupted_pair_before_validation() {
+    fn report_pair(label: &str) -> (String, String) {
+        let body = format!(
+            "# {label}\n\n\
+             ## Findings\n\n\
+             {label} retains a substantive, source-backed finding whose complete generation \
+             must remain consistent across both published artifact formats.\n\n\
+             ## Sources\n\n\
+             1. [Recorded source](https://example.test/recorded-source)\n\n\
+             ## Limitations\n\n\
+             The deterministic fixture validates publication recovery rather than domain truth.\n"
+        );
+        let markdown =
+            markdown_with_artifact_kind(&body, DeepResearchArtifactKind::Synthesized).unwrap();
+        let html = html_with_artifact_kind(
+            &deep_research_completed_report_html(label, &body),
+            DeepResearchArtifactKind::Synthesized,
+        )
+        .unwrap();
+        (markdown, html)
+    }
+
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let report_dir = workspace.path().join(".a3s/research/restart-open");
+    std::fs::create_dir_all(&report_dir).unwrap();
+    let markdown_path = report_dir.join("report.md");
+    let html_path = report_dir.join("index.html");
+    let (previous_markdown, previous_html) = report_pair("Previous generation");
+    let (replacement_markdown, replacement_html) = report_pair("Replacement generation");
+    write_research_report_pair(
+        &markdown_path,
+        &previous_markdown,
+        &html_path,
+        &previous_html,
+    )
+    .unwrap();
+
+    simulate_research_report_pair_interruption_for_test(
+        &markdown_path,
+        &replacement_markdown,
+        &html_path,
+        &replacement_html,
+        ResearchReportPairInterruption::AfterMarkdownReplacement,
+    )
+    .expect("simulate an interruption before HTML replacement");
+
+    let artifacts = research_report_artifacts_from_output(
+        "A3S_RESEARCH_VIEW: .a3s/research/restart-open/index.html",
+        workspace.path(),
+    )
+    .expect("artifact resolution must recover the previous complete pair");
+    let resolved_markdown = std::fs::read_to_string(artifacts.markdown).unwrap();
+    let resolved_html = std::fs::read_to_string(artifacts.html).unwrap();
+    assert!(
+        resolved_markdown.contains("Previous generation"),
+        "{resolved_markdown}"
+    );
+    assert!(resolved_html.contains("Previous generation"), "{resolved_html}");
+    assert!(!resolved_markdown.contains("Replacement generation"));
+    assert!(!resolved_html.contains("Replacement generation"));
+    assert_eq!(
+        std::fs::read_dir(&report_dir).unwrap().count(),
+        2,
+        "artifact resolution must finish transaction cleanup"
+    );
+}
+
+#[test]
+fn report_resolution_removes_an_interrupted_first_generation() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let report_dir = workspace.path().join(".a3s/research/interrupted-first-pair");
+    std::fs::create_dir_all(&report_dir).unwrap();
+    let markdown_path = report_dir.join("report.md");
+    let html_path = report_dir.join("index.html");
+
+    simulate_research_report_pair_interruption_for_test(
+        &markdown_path,
+        b"uncommitted markdown",
+        &html_path,
+        b"uncommitted html",
+        ResearchReportPairInterruption::AfterMarkdownReplacement,
+    )
+    .expect("simulate an interruption during the first publication");
+
+    assert!(
+        research_report_artifacts_from_output(
+            "A3S_RESEARCH_VIEW: .a3s/research/interrupted-first-pair/index.html",
+            workspace.path(),
+        )
+        .is_none(),
+        "a partial first generation must not resolve as a report"
+    );
+    assert_eq!(
+        std::fs::read_dir(&report_dir).unwrap().count(),
+        0,
+        "restart recovery must remove the incomplete generation and transaction files"
+    );
+}
+
+#[test]
+fn report_pair_recovery_rejects_transaction_path_escape() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let report_dir = workspace.path().join(".a3s/research/invalid-transaction");
+    std::fs::create_dir_all(&report_dir).unwrap();
+    let markdown_path = report_dir.join("report.md");
+    let html_path = report_dir.join("index.html");
+    std::fs::write(&markdown_path, b"previous markdown").unwrap();
+    std::fs::write(&html_path, b"previous html").unwrap();
+    let protected = workspace.path().join("protected.md");
+    std::fs::write(&protected, b"protected workspace content").unwrap();
+    let digest = "0".repeat(64);
+    let transaction = serde_json::json!({
+        "version": 1,
+        "markdown_name": "report.md",
+        "html_name": "index.html",
+        "staged_markdown_name": "../../protected.md",
+        "staged_html_name": ".index.html.1.tmp",
+        "previous_markdown_name": null,
+        "previous_html_name": null,
+        "new_markdown_sha256": digest,
+        "new_html_sha256": digest,
+        "previous_markdown_sha256": null,
+        "previous_html_sha256": null
+    });
+    std::fs::write(
+        report_dir.join(RESEARCH_REPORT_PAIR_TRANSACTION_FILE),
+        serde_json::to_vec(&transaction).unwrap(),
+    )
+    .unwrap();
+
+    let error = recover_research_report_pair(&markdown_path, &html_path)
+        .expect_err("transaction paths must remain inside the report directory");
+
+    assert!(
+        error.contains("invalid DeepResearch report transaction file name"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(&protected).unwrap(),
+        b"protected workspace content"
+    );
+    assert_eq!(
+        std::fs::read(&markdown_path).unwrap(),
+        b"previous markdown"
+    );
+    assert_eq!(std::fs::read(&html_path).unwrap(), b"previous html");
+}

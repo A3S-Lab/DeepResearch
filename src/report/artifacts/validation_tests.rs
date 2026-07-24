@@ -220,7 +220,7 @@ fn generated_report_sanitizes_an_unobserved_autolink_inside_bold_disclosure() {
 }
 
 #[test]
-fn internal_status_text_has_a_specific_rejection_diagnostic() {
+fn reader_prose_words_do_not_change_completed_report_admission() {
     let workflow_output = observed_workflow_output(&["https://example.com/observed"]);
     let answer = "# Runtime report\n\n## Findings\n\nDynamicWorkflowRuntime output: an internal transport record that must never be published. This deliberately contains enough additional text to pass the length boundary.\n\n## Sources\n\n- https://example.com/observed\n\n## Limitations\n\nConfidence is bounded.\n";
 
@@ -229,11 +229,10 @@ fn internal_status_text_has_a_specific_rejection_diagnostic() {
         answer,
         &workflow_output,
         None,
-    )
-    .expect("internal status text must have a rejection diagnostic");
+    );
 
-    assert!(
-        diagnostic.contains("internal workflow or tool-status"),
-        "{diagnostic}"
+    assert_eq!(
+        diagnostic, None,
+        "reader prose must not act as an artifact or publication protocol"
     );
 }

@@ -399,6 +399,60 @@ fn raw_acquisition_cannot_claim_semantic_admission_from_metadata_words() {
 }
 
 #[test]
+fn interrupted_acquisition_recovery_is_run_scoped_and_audit_only() {
+    let workspace = std::env::temp_dir().join(format!(
+        "a3s-deepresearch-acquisition-recovery-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let query = "Compare two storage engines";
+    let output = source_backed_fixture(
+        query,
+        serde_json::json!([source_fixture(
+            "bootstrap-web-source-1",
+            "Fetched comparison record",
+            "https://records.example/storage",
+            "The fetched record contains material that still requires closed semantic review."
+        )]),
+    );
+
+    let artifacts = materialize_deep_research_acquisition_recovery_report(
+        &workspace,
+        query,
+        "root-run-17",
+        &output.to_string(),
+        None,
+    )
+    .expect("raw acquisition recovery should be safe")
+    .expect("raw acquisition should retain an audit artifact");
+    let markdown = std::fs::read_to_string(&artifacts.markdown).unwrap();
+
+    assert!(markdown.contains("Fetched comparison record"), "{markdown}");
+    assert!(
+        markdown.contains("not eligible for conclusions"),
+        "{markdown}"
+    );
+    assert!(
+        artifacts
+            .html
+            .to_string_lossy()
+            .contains("-acquisition-recovery-"),
+        "{}",
+        artifacts.html.display()
+    );
+    assert!(
+        !artifacts.html.to_string_lossy().contains("root-run-17"),
+        "the opaque run identity must not become a path component"
+    );
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn raw_fallback_provenance_keeps_every_source_audit_only() {
     let query = "Assess the Aurora release boundary";
     let output = fallback_source_backed_fixture(
@@ -519,6 +573,10 @@ fn inquiry_collection_preserves_semantic_source_admission() {
                         "completion_criterion_indexes": [0],
                         "roles": ["supporting", "primary"]
                     }],
+                    "source_relevance": [{
+                        "source_id": "source:aurora",
+                        "obligation_id": "migration.boundary"
+                    }],
                     "relevant_obligation_ids": ["migration.boundary"],
                     "key_evidence": [
                         "Aurora migration support ends with release 4."
@@ -549,6 +607,10 @@ fn inquiry_collection_preserves_semantic_source_admission() {
     );
     assert!(catalog.sources[0].semantically_admitted);
     assert_eq!(
+        catalog.sources[0].relevant_track_ids,
+        ["migration.boundary"]
+    );
+    assert_eq!(
         catalog.sources[0].coverage,
         [DeepResearchSourceCoverage {
             track_id: "migration.boundary".to_string(),
@@ -556,6 +618,84 @@ fn inquiry_collection_preserves_semantic_source_admission() {
             primary: true,
             independent: false,
         }]
+    );
+}
+
+#[test]
+fn inquiry_relevance_survives_without_full_criterion_coverage() {
+    let query = "Assess the partial Aurora migration evidence";
+    let output = inquiry_relevance_fixture(query, serde_json::json!(["migration.boundary"]));
+
+    let catalog = deep_research_source_catalog(query, &output.to_string(), None)
+        .expect("parse inquiry collection")
+        .expect("retain semantically relevant source");
+
+    assert_eq!(catalog.sources.len(), 1, "{catalog:#?}");
+    assert!(catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(catalog.sources[0].semantically_admitted);
+    assert_eq!(
+        catalog.sources[0].relevant_track_ids,
+        ["migration.boundary"]
+    );
+    assert!(
+        catalog.sources[0].coverage.is_empty(),
+        "partial relevance must not manufacture full criterion coverage: {catalog:#?}"
+    );
+}
+
+#[test]
+fn semantic_selection_without_relevance_or_coverage_remains_audit_only() {
+    let query = "Assess the partial Aurora migration evidence";
+    let output = inquiry_relevance_fixture(query, serde_json::json!([]));
+
+    let catalog = deep_research_source_catalog(query, &output.to_string(), None)
+        .expect("parse inquiry collection")
+        .expect("retain source for audit");
+
+    assert!(!catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(catalog.sources[0].semantically_admitted);
+    assert!(catalog.sources[0].relevant_track_ids.is_empty());
+    assert!(catalog.sources[0].coverage.is_empty());
+}
+
+#[test]
+fn coverage_and_legacy_summary_ids_cannot_manufacture_claim_relevance() {
+    let query = "Assess the partial Aurora migration evidence";
+    let mut output = inquiry_relevance_fixture(query, serde_json::json!(["migration.boundary"]));
+    let structured = output
+        .pointer_mut("/research/results/0/structured")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("closed per-source result");
+    structured.remove("source_relevance");
+    structured.insert(
+        "source_coverage".to_string(),
+        serde_json::json!([{
+            "source_id": "source:aurora",
+            "obligation_id": "migration.boundary",
+            "completion_criterion_indexes": [0],
+            "roles": ["supporting"]
+        }]),
+    );
+
+    let catalog = deep_research_source_catalog(query, &output.to_string(), None)
+        .expect("parse inquiry collection")
+        .expect("retain source for audit");
+
+    assert!(catalog.sources[0].semantically_admitted);
+    assert!(!catalog.sources[0].claim_eligible, "{catalog:#?}");
+    assert!(
+        catalog.sources[0].relevant_track_ids.is_empty(),
+        "only exact source_relevance edges may admit atomic claims: {catalog:#?}"
+    );
+    assert_eq!(
+        catalog.sources[0].coverage,
+        [DeepResearchSourceCoverage {
+            track_id: "migration.boundary".to_string(),
+            completion_criterion_indexes: vec![0],
+            primary: false,
+            independent: false,
+        }],
+        "criterion coverage remains independently auditable"
     );
 }
 
@@ -641,6 +781,7 @@ fn source_snapshot_preserves_closed_selection_order_without_text_scoring() {
         ],
         claim_eligible: true,
         semantically_admitted: true,
+        relevant_track_ids: vec!["request.primary".to_string()],
         coverage: Vec::new(),
     };
 
@@ -649,6 +790,62 @@ fn source_snapshot_preserves_closed_selection_order_without_text_scoring() {
     assert_eq!(selected.len(), 2, "{selected:#?}");
     assert_eq!(selected[0], source.chunks[0]);
     assert_eq!(selected[1], source.chunks[1]);
+}
+
+fn inquiry_relevance_fixture(
+    query: &str,
+    relevant_obligation_ids: serde_json::Value,
+) -> serde_json::Value {
+    let source_relevance = relevant_obligation_ids
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|obligation_id| {
+            serde_json::json!({
+                "source_id": "source:aurora",
+                "obligation_id": obligation_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "query": query,
+        "mode": "inquiry_collection",
+        "research": {
+            "status": "partial",
+            "metadata": {
+                "evidence_selection_mode": "semantic_chunk_ids_with_typed_coverage"
+            },
+            "results": [{
+                "task_id": "evidence_retrieval:source:aurora",
+                "agent": "workflow",
+                "success": true,
+                "structured": {
+                    "summary": "Semantic selection retained partial evidence.",
+                    "sources": [{
+                        "source_id": "source:aurora",
+                        "title": "Aurora migration note",
+                        "url_or_path": "https://research.example/aurora/partial",
+                        "reliability": "fetched",
+                        "evidence_excerpts": [{
+                            "focus": "Assess the migration boundary.",
+                            "quote_or_fact": "The note establishes one bounded migration constraint."
+                        }]
+                    }],
+                    "source_coverage": [],
+                    "source_relevance": source_relevance,
+                    "relevant_obligation_ids": relevant_obligation_ids,
+                    "key_evidence": ["The note establishes one bounded migration constraint."],
+                    "contradictions": [],
+                    "confidence": "Closed-evidence review required.",
+                    "gaps": []
+                }
+            }],
+            "warnings": {
+                "collection_errors": []
+            }
+        }
+    })
 }
 
 #[test]
@@ -826,6 +1023,10 @@ fn ineligible_audit_sources_do_not_poison_synthesized_quality_metrics() {
         direct_answer_count: 1,
         finding_count: 1,
         accepted_claim_count: 2,
+        accepted_relation_count: 0,
+        accepted_derivation_count: 0,
+        accepted_basis_edge_count: 0,
+        accepted_gap_count: 0,
         cited_source_count: 1,
         substantive_character_count: 120,
         relevant_source_count: 1,
@@ -833,7 +1034,6 @@ fn ineligible_audit_sources_do_not_poison_synthesized_quality_metrics() {
     };
 
     validate_deep_research_publication_quality(
-        "Which Nimbus release is supported?",
         DeepResearchEvidenceFirstPublication::Synthesized,
         quality,
     )
@@ -844,7 +1044,6 @@ fn ineligible_audit_sources_do_not_poison_synthesized_quality_metrics() {
         ..quality
     };
     assert!(validate_deep_research_publication_quality(
-        "Which Nimbus release is supported?",
         DeepResearchEvidenceFirstPublication::Synthesized,
         invalid,
     )
@@ -858,6 +1057,10 @@ fn broad_publication_quality_requires_report_depth_metrics() {
         direct_answer_count: 1,
         finding_count: 4,
         accepted_claim_count: 5,
+        accepted_relation_count: 0,
+        accepted_derivation_count: 0,
+        accepted_basis_edge_count: 0,
+        accepted_gap_count: 0,
         cited_source_count: 2,
         substantive_character_count: 479,
         relevant_source_count: 4,
@@ -865,14 +1068,12 @@ fn broad_publication_quality_requires_report_depth_metrics() {
     };
 
     assert!(validate_deep_research_publication_quality(
-        "Aurora program assessment",
         DeepResearchEvidenceFirstPublication::Synthesized,
         shallow,
     )
     .is_err());
 
     validate_deep_research_publication_quality(
-        "Aurora program assessment",
         DeepResearchEvidenceFirstPublication::Synthesized,
         DeepResearchPublicationQuality {
             substantive_character_count: 1_000,
@@ -880,6 +1081,219 @@ fn broad_publication_quality_requires_report_depth_metrics() {
         },
     )
     .expect("a broad publication that meets every depth metric should pass");
+}
+
+#[test]
+fn qualified_publication_requires_a_persisted_typed_gap() {
+    let quality = DeepResearchPublicationQuality {
+        research_scope: DeepResearchReportScope::Focused,
+        direct_answer_count: 1,
+        finding_count: 0,
+        accepted_claim_count: 1,
+        accepted_relation_count: 0,
+        accepted_derivation_count: 0,
+        accepted_basis_edge_count: 0,
+        accepted_gap_count: 0,
+        cited_source_count: 1,
+        substantive_character_count: 80,
+        relevant_source_count: 1,
+        source_count: 1,
+    };
+
+    assert!(validate_deep_research_publication_quality(
+        DeepResearchEvidenceFirstPublication::Qualified,
+        quality,
+    )
+    .is_err());
+    validate_deep_research_publication_quality(
+        DeepResearchEvidenceFirstPublication::Qualified,
+        DeepResearchPublicationQuality {
+            accepted_gap_count: 1,
+            ..quality
+        },
+    )
+    .expect("qualified status must be backed by an explicit typed evidence gap");
+}
+
+#[test]
+fn publication_receipt_recovers_only_the_exact_run_and_artifact_generation() {
+    let workspace = tempfile::tempdir().expect("create publication receipt workspace");
+    let query = "Assess the current release boundary";
+    let run_id = "research-publication-receipt";
+    let artifacts = materialize_deep_research_no_evidence_report(workspace.path(), query)
+        .expect("materialize no-evidence publication");
+    let quality = DeepResearchPublicationQuality {
+        research_scope: DeepResearchReportScope::Focused,
+        direct_answer_count: 0,
+        finding_count: 0,
+        accepted_claim_count: 0,
+        accepted_relation_count: 0,
+        accepted_derivation_count: 0,
+        accepted_basis_edge_count: 0,
+        accepted_gap_count: 0,
+        cited_source_count: 0,
+        substantive_character_count: 0,
+        relevant_source_count: 0,
+        source_count: 0,
+    };
+
+    record_deep_research_publication_receipt(
+        workspace.path(),
+        query,
+        run_id,
+        DeepResearchEvidenceFirstPublication::NoEvidence,
+        quality,
+        &artifacts,
+    )
+    .expect("record exact publication receipt");
+
+    let receipt_path = artifacts
+        .html
+        .parent()
+        .expect("publication directory")
+        .join("publication-receipt.json");
+    let mut legacy_receipt: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&receipt_path).expect("read current publication receipt"),
+    )
+    .expect("decode current publication receipt");
+    assert_eq!(legacy_receipt["schema_version"], 2);
+    legacy_receipt["schema_version"] = serde_json::json!(1);
+    let legacy_quality = legacy_receipt["quality"]
+        .as_object_mut()
+        .expect("receipt quality object");
+    for field in [
+        "accepted_relation_count",
+        "accepted_derivation_count",
+        "accepted_basis_edge_count",
+        "accepted_gap_count",
+    ] {
+        legacy_quality.remove(field);
+    }
+    std::fs::write(
+        &receipt_path,
+        serde_json::to_vec_pretty(&legacy_receipt).expect("encode version-1 receipt"),
+    )
+    .expect("write compatible version-1 receipt");
+
+    let recovered = recover_deep_research_publication_receipt(workspace.path(), query, run_id)
+        .expect("recover exact publication receipt")
+        .expect("receipt-backed publication");
+    assert_eq!(recovered.artifacts, artifacts);
+    assert_eq!(
+        recovered.publication,
+        DeepResearchEvidenceFirstPublication::NoEvidence
+    );
+    assert_eq!(recovered.quality, quality);
+    assert!(
+        recover_deep_research_publication_receipt(workspace.path(), query, "another-run")
+            .expect("reject another run without treating it as corruption")
+            .is_none()
+    );
+
+    std::fs::write(
+        &artifacts.markdown,
+        "# Replaced report\n\nThe receipt must not authorize this generation.\n",
+    )
+    .expect("replace one artifact after receipt");
+    assert!(
+        recover_deep_research_publication_receipt(workspace.path(), query, run_id)
+            .expect("digest mismatch is typed absence rather than content recovery")
+            .is_none()
+    );
+}
+
+#[test]
+fn exact_run_receipt_recovers_a_committed_publication_after_an_ambiguous_failure() {
+    let workspace = tempfile::tempdir().expect("create receipt resolution workspace");
+    let query = "Assess the current release boundary";
+    let run_id = "receipt-resolution-run";
+    let artifacts = materialize_deep_research_no_evidence_report(workspace.path(), query)
+        .expect("materialize no-evidence publication");
+    let quality = DeepResearchPublicationQuality {
+        research_scope: DeepResearchReportScope::Focused,
+        ..DeepResearchPublicationQuality::default()
+    };
+    record_deep_research_publication_receipt(
+        workspace.path(),
+        query,
+        run_id,
+        DeepResearchEvidenceFirstPublication::NoEvidence,
+        quality,
+        &artifacts,
+    )
+    .expect("record committed publication receipt");
+
+    let resolved = resolve_deep_research_run_publication(
+        workspace.path(),
+        query,
+        run_id,
+        "publication port returned an ambiguous failure",
+    )
+    .expect("resolve exact committed publication")
+    .expect("receipt-backed publication");
+
+    assert_eq!(resolved.artifacts, artifacts);
+    assert_eq!(
+        resolved.publication,
+        DeepResearchEvidenceFirstPublication::NoEvidence
+    );
+    assert_eq!(resolved.quality, quality);
+}
+
+#[test]
+fn exact_run_receipt_rejects_a_conflicting_structured_publication() {
+    let workspace = tempfile::tempdir().expect("create receipt conflict workspace");
+    let query = "Assess the current release boundary";
+    let run_id = "receipt-conflict-run";
+    let artifacts = materialize_deep_research_no_evidence_report(workspace.path(), query)
+        .expect("materialize no-evidence publication");
+    let quality = DeepResearchPublicationQuality {
+        research_scope: DeepResearchReportScope::Focused,
+        ..DeepResearchPublicationQuality::default()
+    };
+    record_deep_research_publication_receipt(
+        workspace.path(),
+        query,
+        run_id,
+        DeepResearchEvidenceFirstPublication::NoEvidence,
+        quality,
+        &artifacts,
+    )
+    .expect("record committed publication receipt");
+    let slug = deep_research_report_slug(query);
+    let conflicting_output = serde_json::json!({
+        "query": query,
+        "mode": "evidence_first_report",
+        "publication": {
+            "status": "no_evidence",
+            "markdown": format!(".a3s/research/{slug}/report.md"),
+            "html": format!(".a3s/research/{slug}/index.html"),
+            "quality": {
+                "research_scope": "comprehensive",
+                "direct_answer_count": 0,
+                "finding_count": 0,
+                "accepted_claim_count": 0,
+                "accepted_relation_count": 0,
+                "accepted_derivation_count": 0,
+                "accepted_basis_edge_count": 0,
+                "accepted_gap_count": 0,
+                "cited_source_count": 0,
+                "substantive_character_count": 0,
+                "relevant_source_count": 0,
+                "source_count": 0,
+            },
+        },
+    })
+    .to_string();
+
+    let error =
+        resolve_deep_research_run_publication(workspace.path(), query, run_id, &conflicting_output)
+            .expect_err("conflicting durable authorities must fail closed");
+
+    assert_eq!(
+        error,
+        "the workflow publication disagrees with the exact run receipt"
+    );
 }
 
 fn source_backed_fixture(query: &str, sources: serde_json::Value) -> serde_json::Value {

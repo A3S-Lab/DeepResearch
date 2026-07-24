@@ -3,14 +3,144 @@ mod html_quality_gate_tests {
     use super::complete_html_document;
 
     #[test]
-    fn rejects_bare_or_visually_hidden_html() {
+    fn rejects_html_without_the_host_renderer_contract_or_with_script_content() {
         assert!(!complete_html_document(
             "<!doctype html><html><body><h1>Report</h1><p>Sources and confidence.</p></body></html>"
         ));
-        let hidden = "<html><head><meta name=\"viewport\"><title>x</title><style>body{display:none}@media(max-width:600px){}@media print{}a:focus{}table{overflow-x:auto}h1{font-size:clamp(2rem,3vw,4rem)}</style></head><body><h1>x</h1></body></html>";
-        assert!(!complete_html_document(hidden));
+        let scripted = format!(
+            "<!doctype html><html><head><meta name=\"viewport\"><title>x</title><style></style></head><body><h1>x</h1><main {}><article><script>unsafe()</script></article></main></body></html>",
+            super::DEEP_RESEARCH_HTML_DOCUMENT_ATTR
+        );
+        assert!(!complete_html_document(&scripted));
     }
 }
+
+const SYNTHESIZED_ARTIFACT_MARKER: &str =
+    "A3S_DEEP_RESEARCH_ARTIFACT:synthesized:v1";
+const SOURCE_BACKED_ARTIFACT_MARKER: &str =
+    "A3S_DEEP_RESEARCH_ARTIFACT:source_backed:v1";
+const NO_EVIDENCE_ARTIFACT_MARKER: &str =
+    "A3S_DEEP_RESEARCH_ARTIFACT:no_evidence:v1";
+const RECOVERY_ARTIFACT_MARKER: &str = "A3S_DEEP_RESEARCH_ARTIFACT:recovery:v1";
+const FALLBACK_ARTIFACT_MARKER: &str = "A3S_DEEP_RESEARCH_ARTIFACT:fallback:v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeepResearchArtifactKind {
+    Synthesized,
+    SourceBacked,
+    NoEvidence,
+    Recovery,
+    Fallback,
+}
+
+impl DeepResearchArtifactKind {
+    fn marker(self) -> &'static str {
+        match self {
+            Self::Synthesized => SYNTHESIZED_ARTIFACT_MARKER,
+            Self::SourceBacked => SOURCE_BACKED_ARTIFACT_MARKER,
+            Self::NoEvidence => NO_EVIDENCE_ARTIFACT_MARKER,
+            Self::Recovery => RECOVERY_ARTIFACT_MARKER,
+            Self::Fallback => FALLBACK_ARTIFACT_MARKER,
+        }
+    }
+}
+
+fn artifact_marker_line(kind: DeepResearchArtifactKind) -> String {
+    format!("<!-- {} -->", kind.marker())
+}
+
+fn deep_research_artifact_kind(text: &str) -> Option<DeepResearchArtifactKind> {
+    let mut observed = None;
+    for line in text.lines().map(str::trim) {
+        let Some(kind) = [
+            DeepResearchArtifactKind::Synthesized,
+            DeepResearchArtifactKind::SourceBacked,
+            DeepResearchArtifactKind::NoEvidence,
+            DeepResearchArtifactKind::Recovery,
+            DeepResearchArtifactKind::Fallback,
+        ]
+        .into_iter()
+        .find(|kind| line == artifact_marker_line(*kind))
+        else {
+            continue;
+        };
+        match observed {
+            Some(previous) if previous != kind => return None,
+            Some(_) => {}
+            None => observed = Some(kind),
+        }
+    }
+    observed
+}
+
+fn deep_research_artifact_pair_has_kind(
+    markdown: &str,
+    html: &str,
+    expected: DeepResearchArtifactKind,
+) -> bool {
+    deep_research_artifact_kind(markdown) == Some(expected)
+        && deep_research_artifact_kind(html) == Some(expected)
+}
+
+fn markdown_with_artifact_kind(
+    markdown: &str,
+    kind: DeepResearchArtifactKind,
+) -> Result<String, String> {
+    if deep_research_artifact_kind(markdown).is_some() {
+        return Err("report content already contains a reserved artifact marker".to_string());
+    }
+    let body = markdown.trim();
+    let marker = artifact_marker_line(kind);
+    Ok(match body.split_once('\n') {
+        Some((heading, remainder)) => format!("{heading}\n\n{marker}\n\n{}", remainder.trim_start()),
+        None => format!("{body}\n\n{marker}\n"),
+    })
+}
+
+fn html_with_artifact_kind(
+    html: &str,
+    kind: DeepResearchArtifactKind,
+) -> Result<String, String> {
+    if deep_research_artifact_kind(html).is_some() {
+        return Err("rendered report already contains a reserved artifact marker".to_string());
+    }
+    Ok(format!("{}\n{}", artifact_marker_line(kind), html.trim_start()))
+}
+
+#[cfg(test)]
+mod artifact_kind_tests {
+    use super::{
+        artifact_marker_line, deep_research_artifact_kind, DeepResearchArtifactKind,
+    };
+
+    #[test]
+    fn reader_facing_words_never_classify_an_artifact() {
+        for text in [
+            "# DeepResearch Recovery Report\n\nA reader-facing title.",
+            "<h1>DeepResearch Fallback Draft</h1><p>Not a final report.</p>",
+            "A source discusses A3S_DEEP_RESEARCH_ARTIFACT without a protocol marker.",
+        ] {
+            assert_eq!(deep_research_artifact_kind(text), None);
+        }
+    }
+
+    #[test]
+    fn exact_protocol_markers_are_the_only_artifact_authority() {
+        let marker = artifact_marker_line(DeepResearchArtifactKind::Recovery);
+        assert_eq!(
+            deep_research_artifact_kind(&format!("# Report\n\n{marker}\n\nBody")),
+            Some(DeepResearchArtifactKind::Recovery)
+        );
+        assert_eq!(
+            deep_research_artifact_kind(&format!(
+                "{marker}\n{}",
+                artifact_marker_line(DeepResearchArtifactKind::Fallback)
+            )),
+            None
+        );
+    }
+}
+
 fn has_research_report_substance(markdown: &str, html: &str) -> bool {
     const MIN_MARKDOWN_TEXT_CHARS: usize = 120;
     const MIN_HTML_TEXT_CHARS: usize = 120;
@@ -29,40 +159,6 @@ fn has_research_report_substance(markdown: &str, html: &str) -> bool {
         && html.contains("<main")
         && html.contains("<article")
         && html.contains("<h1")
-}
-
-pub fn deep_research_output_has_internal_leak(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    if deep_research_contains_workflow_store_reference(&lower) {
-        return true;
-    }
-    [
-        "a3s://tool-output",
-        "[tool output truncated",
-        "full output artifact:",
-        "dynamicworkflowruntime output:",
-        "dynamicworkflowruntime metadata:",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
-
-pub fn deep_research_contains_workflow_store_reference(text: &str) -> bool {
-    [".a3s/workflow", ".a3s\\workflow"]
-        .into_iter()
-        .any(|marker| {
-            text.match_indices(marker).any(|(index, _)| {
-                text[index + marker.len()..]
-                    .chars()
-                    .next()
-                    .is_none_or(|next| {
-                        next == '/'
-                            || next == '\\'
-                            || next.is_whitespace()
-                            || matches!(next, '`' | '"' | '\'' | ')' | ']' | '}' | ',' | ';' | ':')
-                    })
-            })
-        })
 }
 
 pub fn normalize_research_source_anchor(value: &str) -> Option<String> {
@@ -87,8 +183,6 @@ pub fn normalize_research_source_anchor(value: &str) -> Option<String> {
         .to_string();
     if normalized.len() < 4
         || normalized.starts_with("a3s://")
-        || deep_research_contains_workflow_store_reference(&normalized)
-        || deep_research_output_has_internal_leak(&normalized)
         || !looks_like_traceable_source(&normalized)
     {
         None
@@ -196,15 +290,7 @@ fn strip_html_tags(html: &str) -> String {
 }
 
 pub fn looks_like_deep_research_fallback_draft(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("deepresearch fallback draft")
-        || lower.contains("deepresearch fallback")
-        || lower.contains("deep research fallback draft")
-        || lower.contains("<title>deepresearch fallback draft")
-        || lower.contains("<h1>deepresearch fallback draft")
-        || lower.contains("# deepresearch fallback draft")
-        || lower.contains("not a completed deepresearch report")
-        || lower.contains("not a final report")
+    deep_research_artifact_kind(text) == Some(DeepResearchArtifactKind::Fallback)
 }
 
 fn is_html_path(path: &Path) -> bool {

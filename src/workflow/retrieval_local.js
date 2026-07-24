@@ -58,12 +58,33 @@
     }
     return "";
   };
-  const cleanLocalReadText = (value) => String(value || "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .filter((line) =>
-      !/^\s*\.\.\. \(more lines available; continue with offset=\d+\)\s*$/.test(line)
-    )
-    .map((line) => line.replace(/^\s*\d+\t/, ""))
-    .join("\n")
-    .trim();
+  const cleanLocalReadText = (value, offset, returnedLines) => {
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(returnedLines) ||
+      returnedLines <= 0
+    ) {
+      return "";
+    }
+    const framedLines = String(value || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .slice(0, returnedLines);
+    if (framedLines.length !== returnedLines) {
+      return "";
+    }
+    const restored = [];
+    for (let index = 0; index < framedLines.length; index += 1) {
+      const line = framedLines[index];
+      const separator = line.indexOf("\t");
+      if (
+        separator < 0 ||
+        Number(line.slice(0, separator).trim()) !== offset + index + 1
+      ) {
+        return "";
+      }
+      restored.push(line.slice(separator + 1));
+    }
+    return restored.join("\n").trim();
+  };

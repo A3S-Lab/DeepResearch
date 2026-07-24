@@ -175,6 +175,9 @@
           source_coverage: durableSourceCoverage.filter((binding) =>
             binding.source_id === source.source_id
           ),
+          source_relevance: sourceRelevance.bindings.filter((binding) =>
+            binding.source_id === source.source_id
+          ),
           relevant_obligation_ids: sourceRelevance.bindings
             .filter((binding) => binding.source_id === source.source_id)
             .map((binding) => binding.obligation_id),

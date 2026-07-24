@@ -1,6 +1,20 @@
 use super::test_support::*;
 use super::*;
 
+#[test]
+fn compiler_coverage_is_a_closed_enum_with_a_stable_wire_value() {
+    let coverage = CompilerCoverage {
+        dimension_id: "answer".to_string(),
+        material: true,
+        status: CompilerStructuralCoverage::ClaimsAndGap,
+    };
+
+    assert_eq!(
+        serde_json::to_value(coverage).expect("serialize compiler coverage")["status"],
+        "claims_and_gap"
+    );
+}
+
 fn one_dimension_fixture(
     outcome: AcquisitionOutcome,
     with_source: bool,

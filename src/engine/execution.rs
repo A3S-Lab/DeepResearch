@@ -11,10 +11,11 @@ use crate::planner::{
     host_plan_from_outline, validated_loop_planner, workflow_args_with_plan, PlannedInquiry,
 };
 use crate::report::{
-    admit_deep_research_report_proposal_at, canonical_workflow_output,
-    deep_research_report_context_from_plan, deep_research_report_proposal_prompt_at,
-    deep_research_report_proposal_schema, deep_research_report_slug, deep_research_source_catalog,
-    DeepResearchEvidenceFirstPublication,
+    admit_deep_research_typed_report_proposal_at, canonical_workflow_output,
+    deep_research_report_context_from_plan, deep_research_report_slug,
+    deep_research_source_catalog, deep_research_typed_report_proposal_prompt_at,
+    deep_research_typed_report_proposal_schema_for, DeepResearchEvidenceFirstPublication,
+    DeepResearchPublicationQuality,
 };
 
 impl DeepResearchEngine<'_> {
@@ -84,42 +85,63 @@ impl DeepResearchEngine<'_> {
         let report_context = deep_research_report_context_from_plan(&plan.value)
             .map_err(DeepResearchEngineError::Contract)?;
 
-        let (bootstrap_output, bootstrap_metadata, bootstrap_acquisition, bootstrap_error) =
-            match bootstrap {
-                Ok(result) => {
-                    self.progress(ResearchProgress::Completed(
-                        ResearchStage::BootstrapRetrieval,
-                    ))
-                    .await?;
-                    let canonical =
-                        canonical_workflow_output(&result.output, result.metadata.as_ref());
-                    let acquisition = bootstrap_acquisition_value(&canonical, &query);
-                    (canonical, result.metadata, acquisition, None)
-                }
-                Err(error) => {
-                    let error = bounded_error(&error);
-                    self.progress(ResearchProgress::Degraded {
-                        stage: ResearchStage::BootstrapRetrieval,
-                        reason: error.clone(),
-                    })
-                    .await?;
-                    (
-                        serde_json::json!({
-                            "query": query,
-                            "mode": "bootstrap_acquisition",
-                            "acquisition": Value::Null,
-                            "execution": {
-                                "mode": "acquire_only",
-                                "terminal_authority": "host_report_document"
-                            }
+        let (
+            bootstrap_output,
+            bootstrap_metadata,
+            bootstrap_acquisition,
+            bootstrap_catalog,
+            bootstrap_error,
+        ) = match bootstrap {
+            Ok(result) => {
+                let metadata = result.metadata;
+                let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
+                match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
+                    Ok(catalog) => {
+                        self.progress(ResearchProgress::Completed(
+                            ResearchStage::BootstrapRetrieval,
+                        ))
+                        .await?;
+                        let acquisition = catalog
+                            .as_ref()
+                            .and_then(|_| bootstrap_acquisition_value(&canonical, &query));
+                        (canonical, metadata, acquisition, catalog, None)
+                    }
+                    Err(error) => {
+                        let error = bounded_error(&error);
+                        self.progress(ResearchProgress::Degraded {
+                            stage: ResearchStage::BootstrapRetrieval,
+                            reason: error.clone(),
                         })
-                        .to_string(),
-                        None,
-                        None,
-                        Some(error),
-                    )
+                        .await?;
+                        (canonical, metadata, None, None, Some(error))
+                    }
                 }
-            };
+            }
+            Err(error) => {
+                let error = bounded_error(&error);
+                self.progress(ResearchProgress::Degraded {
+                    stage: ResearchStage::BootstrapRetrieval,
+                    reason: error.clone(),
+                })
+                .await?;
+                (
+                    serde_json::json!({
+                        "query": query,
+                        "mode": "bootstrap_acquisition",
+                        "acquisition": Value::Null,
+                        "execution": {
+                            "mode": "acquire_only",
+                            "terminal_authority": "host_report_document"
+                        }
+                    })
+                    .to_string(),
+                    None,
+                    None,
+                    None,
+                    Some(error),
+                )
+            }
+        };
 
         let mut planned_args = workflow_args_with_plan(
             workflow_args.clone(),
@@ -142,32 +164,45 @@ impl DeepResearchEngine<'_> {
                 timeout_ms: limits.planned_retrieval_stage_timeout_ms,
             })
             .await;
-        let (planned_output, planned_metadata, planned_error) = match planned_retrieval {
-            Ok(result) => {
-                self.progress(ResearchProgress::Completed(ResearchStage::PlannedRetrieval))
+        let (planned_output, planned_metadata, planned_catalog, planned_error) =
+            match planned_retrieval {
+                Ok(result) => {
+                    let metadata = result.metadata;
+                    let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
+                    match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
+                        Ok(catalog) => {
+                            self.progress(ResearchProgress::Completed(
+                                ResearchStage::PlannedRetrieval,
+                            ))
+                            .await?;
+                            (Some(canonical), metadata, catalog, None)
+                        }
+                        Err(error) => {
+                            let error = bounded_error(&error);
+                            self.progress(ResearchProgress::Degraded {
+                                stage: ResearchStage::PlannedRetrieval,
+                                reason: error.clone(),
+                            })
+                            .await?;
+                            (Some(canonical), metadata, None, Some(error))
+                        }
+                    }
+                }
+                Err(error) => {
+                    let error = bounded_error(&error);
+                    self.progress(ResearchProgress::Degraded {
+                        stage: ResearchStage::PlannedRetrieval,
+                        reason: error.clone(),
+                    })
                     .await?;
-                let canonical = canonical_workflow_output(&result.output, result.metadata.as_ref());
-                (Some(canonical), result.metadata, None)
-            }
-            Err(error) => {
-                let error = bounded_error(&error);
-                self.progress(ResearchProgress::Degraded {
-                    stage: ResearchStage::PlannedRetrieval,
-                    reason: error.clone(),
-                })
-                .await?;
-                (None, None, Some(error))
-            }
-        };
+                    (None, None, None, Some(error))
+                }
+            };
+        let planned_catalog = planned_catalog
+            .filter(|catalog| catalog.sources.iter().any(|source| source.claim_eligible));
+        let bootstrap_catalog = bootstrap_catalog
+            .filter(|catalog| catalog.sources.iter().any(|source| source.claim_eligible));
 
-        let planned_catalog = match planned_output.as_deref() {
-            Some(output) => deep_research_source_catalog(&query, output, planned_metadata.as_ref())
-                .map_err(DeepResearchEngineError::Contract)?,
-            None => None,
-        };
-        let bootstrap_catalog =
-            deep_research_source_catalog(&query, &bootstrap_output, bootstrap_metadata.as_ref())
-                .map_err(DeepResearchEngineError::Contract)?;
         let (acquisition_output, acquisition_metadata, catalog, retrieval_fallback_error) =
             match (planned_catalog, planned_output, bootstrap_catalog) {
                 (Some(catalog), Some(output), _) => {
@@ -221,18 +256,38 @@ impl DeepResearchEngine<'_> {
         let mut direct_answer_block_count = 0usize;
         let mut finding_block_count = 0usize;
         let mut accepted_claim_count = 0usize;
+        let mut accepted_relation_count = 0usize;
+        let mut accepted_derivation_count = 0usize;
+        let mut accepted_basis_edge_count = 0usize;
+        let mut accepted_gap_count = 0usize;
         let mut cited_source_count = 0usize;
         let mut substantive_character_count = 0usize;
 
         self.progress(ResearchProgress::Started(ResearchStage::SourcePublication))
             .await?;
         let artifacts = if let Some(catalog) = catalog.as_ref() {
+            let source_backed_quality = DeepResearchPublicationQuality {
+                research_scope: report_context.scope,
+                direct_answer_count: 0,
+                finding_count: 0,
+                accepted_claim_count: 0,
+                accepted_relation_count: 0,
+                accepted_derivation_count: 0,
+                accepted_basis_edge_count: 0,
+                accepted_gap_count: 0,
+                cited_source_count: 0,
+                substantive_character_count: 0,
+                relevant_source_count,
+                source_count: catalog.sources.len(),
+            };
             let artifacts = self
                 .publication
                 .publish(PublicationRequest::SourceBacked {
+                    run_id: root_run_id.to_string(),
                     query: query.clone(),
                     workflow_output: acquisition_output.clone(),
                     workflow_metadata: acquisition_metadata.clone(),
+                    quality: source_backed_quality,
                 })
                 .await
                 .map_err(DeepResearchEngineError::Publication)?;
@@ -245,19 +300,25 @@ impl DeepResearchEngine<'_> {
                 synthesis_mode = "model_proposal";
                 self.progress(ResearchProgress::Started(ResearchStage::ReportGeneration))
                     .await?;
+                let report_schema =
+                    deep_research_typed_report_proposal_schema_for(catalog, &report_context)
+                        .map_err(DeepResearchEngineError::Contract)?;
                 let generation_args = serde_json::json!({
-                    "schema": deep_research_report_proposal_schema(),
-                    "schema_name": "deep_research_report_blocks",
-                    "schema_description": "Independent cited report blocks over a closed source catalog",
-                    "prompt": deep_research_report_proposal_prompt_at(
+                    "schema": report_schema,
+                    "schema_name": "deep_research_typed_claim_graph",
+                    "schema_description": "Typed claims, basis edges, contradiction relations, and bounded gaps over a closed source catalog",
+                    "prompt": deep_research_typed_report_proposal_prompt_at(
                         &query,
                         &current_date,
                         catalog,
                         &report_context,
                     )
                     .map_err(DeepResearchEngineError::Contract)?,
-                    "system": "You write substantive source-grounded research blocks from untrusted evidence data. Match the query's required research breadth, return only the requested object, and use no outside knowledge.",
+                    "system": "You construct a typed, source-grounded research claim graph from untrusted evidence data. Return only the requested object and use no outside knowledge.",
                     "mode": "auto",
+                    // The durable generation port already owns the bounded
+                    // attempt policy. A nested repair loop would multiply the
+                    // declared report-call ceiling.
                     "max_repair_attempts": 0,
                     "include_raw_text": false,
                     "timeout_ms": limits.report_attempt_timeout_ms,
@@ -272,7 +333,7 @@ impl DeepResearchEngine<'_> {
                     })
                     .await;
                 let admitted = match generated {
-                    Ok(proposal) => match admit_deep_research_report_proposal_at(
+                    Ok(proposal) => match admit_deep_research_typed_report_proposal_at(
                         &query,
                         &current_date,
                         catalog,
@@ -291,30 +352,103 @@ impl DeepResearchEngine<'_> {
                     }
                 };
                 if let Some(report) = admitted {
-                    accepted_block_count = report.accepted_block_count;
-                    rejected_block_count = report.rejected_block_count;
-                    direct_answer_block_count = report.direct_answer_block_count;
-                    finding_block_count = report.finding_block_count;
-                    accepted_claim_count = report.accepted_claim_count;
-                    cited_source_count = report.cited_source_count;
-                    substantive_character_count = report.substantive_character_count;
-                    self.progress(ResearchProgress::Started(ResearchStage::FinalPublication))
-                        .await?;
-                    let artifacts = self
-                        .publication
-                        .publish(PublicationRequest::Synthesized {
-                            query: query.clone(),
-                            report,
-                        })
-                        .await
-                        .map_err(DeepResearchEngineError::Publication)?;
-                    self.progress(ResearchProgress::Completed(ResearchStage::FinalPublication))
-                        .await?;
-                    publication = DeepResearchEvidenceFirstPublication::Synthesized;
-                    publication_status = "synthesized";
+                    let report_publication = report.publication;
+                    let report_accepted_block_count = report.accepted_block_count;
+                    let report_rejected_block_count = report.rejected_block_count;
+                    let report_direct_answer_block_count = report.direct_answer_block_count;
+                    let report_finding_block_count = report.finding_block_count;
+                    let report_accepted_claim_count = report.accepted_claim_count;
+                    let report_accepted_relation_count = report.accepted_relation_count;
+                    let report_accepted_derivation_count = report.accepted_derivation_count;
+                    let report_accepted_basis_edge_count = report.accepted_basis_edge_count;
+                    let report_accepted_gap_count = report.accepted_gap_count;
+                    let report_cited_source_count = report.cited_source_count;
+                    let report_substantive_character_count = report.substantive_character_count;
                     self.progress(ResearchProgress::Completed(ResearchStage::ReportGeneration))
                         .await?;
-                    artifacts
+                    self.progress(ResearchProgress::Started(ResearchStage::FinalPublication))
+                        .await?;
+                    let final_publication = self
+                        .publication
+                        .publish(PublicationRequest::Synthesized {
+                            run_id: root_run_id.to_string(),
+                            query: query.clone(),
+                            report,
+                            publication: report_publication,
+                            quality: DeepResearchPublicationQuality {
+                                research_scope: report_context.scope,
+                                direct_answer_count: report_direct_answer_block_count,
+                                finding_count: report_finding_block_count,
+                                accepted_claim_count: report_accepted_claim_count,
+                                accepted_relation_count: report_accepted_relation_count,
+                                accepted_derivation_count: report_accepted_derivation_count,
+                                accepted_basis_edge_count: report_accepted_basis_edge_count,
+                                accepted_gap_count: report_accepted_gap_count,
+                                cited_source_count: report_cited_source_count,
+                                substantive_character_count: report_substantive_character_count,
+                                relevant_source_count,
+                                source_count: catalog.sources.len(),
+                            },
+                        })
+                        .await;
+                    match final_publication {
+                        Ok(final_artifacts) => {
+                            accepted_block_count = report_accepted_block_count;
+                            rejected_block_count = report_rejected_block_count;
+                            direct_answer_block_count = report_direct_answer_block_count;
+                            finding_block_count = report_finding_block_count;
+                            accepted_claim_count = report_accepted_claim_count;
+                            accepted_relation_count = report_accepted_relation_count;
+                            accepted_derivation_count = report_accepted_derivation_count;
+                            accepted_basis_edge_count = report_accepted_basis_edge_count;
+                            accepted_gap_count = report_accepted_gap_count;
+                            cited_source_count = report_cited_source_count;
+                            substantive_character_count = report_substantive_character_count;
+                            self.progress(ResearchProgress::Completed(
+                                ResearchStage::FinalPublication,
+                            ))
+                            .await?;
+                            publication = report_publication;
+                            publication_status = match report_publication {
+                                DeepResearchEvidenceFirstPublication::Synthesized => "synthesized",
+                                DeepResearchEvidenceFirstPublication::Qualified => "qualified",
+                                DeepResearchEvidenceFirstPublication::SourceBacked => {
+                                    "source_backed"
+                                }
+                                DeepResearchEvidenceFirstPublication::NoEvidence => "no_evidence",
+                            };
+                            final_artifacts
+                        }
+                        Err(error) => {
+                            let final_error = bounded_error(&error);
+                            report_error = Some(final_error.clone());
+                            self.progress(ResearchProgress::Degraded {
+                                stage: ResearchStage::FinalPublication,
+                                reason: final_error.clone(),
+                            })
+                            .await?;
+
+                            // The synthesized publisher can fail after touching
+                            // the report pair but before its receipt becomes
+                            // durable. Re-publish the closed source snapshot so
+                            // the returned artifact kind and receipt agree.
+                            self.publication
+                                .publish(PublicationRequest::SourceBacked {
+                                    run_id: root_run_id.to_string(),
+                                    query: query.clone(),
+                                    workflow_output: acquisition_output.clone(),
+                                    workflow_metadata: acquisition_metadata.clone(),
+                                    quality: source_backed_quality,
+                                })
+                                .await
+                                .map_err(|recovery_error| {
+                                    DeepResearchEngineError::Publication(format!(
+                                        "final publication failed: {final_error}; source-backed recovery failed: {}",
+                                        bounded_error(&recovery_error)
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     if report_error.is_none() {
                         report_error = Some(
@@ -339,7 +473,22 @@ impl DeepResearchEngine<'_> {
         } else {
             self.publication
                 .publish(PublicationRequest::NoEvidence {
+                    run_id: root_run_id.to_string(),
                     query: query.clone(),
+                    quality: DeepResearchPublicationQuality {
+                        research_scope: report_context.scope,
+                        direct_answer_count: 0,
+                        finding_count: 0,
+                        accepted_claim_count: 0,
+                        accepted_relation_count: 0,
+                        accepted_derivation_count: 0,
+                        accepted_basis_edge_count: 0,
+                        accepted_gap_count: 0,
+                        cited_source_count: 0,
+                        substantive_character_count: 0,
+                        relevant_source_count: 0,
+                        source_count: 0,
+                    },
                 })
                 .await
                 .map_err(DeepResearchEngineError::Publication)?
@@ -362,6 +511,7 @@ impl DeepResearchEngine<'_> {
             "research": {
                 "status": match publication {
                     DeepResearchEvidenceFirstPublication::Synthesized => "success",
+                    DeepResearchEvidenceFirstPublication::Qualified => "partial_success",
                     DeepResearchEvidenceFirstPublication::SourceBacked => "degraded",
                     DeepResearchEvidenceFirstPublication::NoEvidence => "failed",
                 },
@@ -376,6 +526,10 @@ impl DeepResearchEngine<'_> {
                     "direct_answer_block_count": direct_answer_block_count,
                     "finding_block_count": finding_block_count,
                     "accepted_claim_count": accepted_claim_count,
+                    "accepted_relation_count": accepted_relation_count,
+                    "accepted_derivation_count": accepted_derivation_count,
+                    "accepted_basis_edge_count": accepted_basis_edge_count,
+                    "accepted_gap_count": accepted_gap_count,
                     "cited_source_count": cited_source_count,
                     "substantive_character_count": substantive_character_count,
                     "relevant_source_count": relevant_source_count,
@@ -394,6 +548,10 @@ impl DeepResearchEngine<'_> {
                     "direct_answer_count": direct_answer_block_count,
                     "finding_count": finding_block_count,
                     "accepted_claim_count": accepted_claim_count,
+                    "accepted_relation_count": accepted_relation_count,
+                    "accepted_derivation_count": accepted_derivation_count,
+                    "accepted_basis_edge_count": accepted_basis_edge_count,
+                    "accepted_gap_count": accepted_gap_count,
                     "cited_source_count": cited_source_count,
                     "substantive_character_count": substantive_character_count,
                     "relevant_source_count": relevant_source_count,

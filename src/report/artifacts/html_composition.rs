@@ -52,7 +52,9 @@ pub(super) fn compose_report_fragment(
         section_count += 1;
         let section_id = format!("section-{section_count}");
         let heading_text = decode_basic_entities(&strip_html_tags(heading_html));
-        let treatment = matching_section_treatment(&heading_text, section_plan);
+        // The closed section-plan array is positional. Reader-facing heading
+        // text never selects a visual treatment.
+        let treatment = section_plan.get(section_count - 1);
         let composition = treatment
             .map(|treatment| treatment.composition)
             .unwrap_or(ReportSectionComposition::Prose);
@@ -188,15 +190,6 @@ fn compose_subheaded_blocks(
     (output, count)
 }
 
-fn matching_section_treatment<'a>(
-    heading: &str,
-    section_plan: &'a [ReportSectionTreatment],
-) -> Option<&'a ReportSectionTreatment> {
-    section_plan
-        .iter()
-        .find(|treatment| treatment.heading.trim() == heading.trim())
-}
-
 fn default_section_rhythm(composition: ReportSectionComposition) -> ReportSectionRhythm {
     match composition {
         ReportSectionComposition::Comparison
@@ -283,16 +276,16 @@ mod tests {
     }
 
     #[test]
-    fn section_plan_controls_rhythm_and_semantic_composition_without_heading_keywords() {
+    fn section_plan_controls_composition_by_position_not_heading_text() {
         let fragment = "<h2>What changed</h2><h3>Before</h3><p>Old state.</p><h3>After</h3><p>New state.</p><h2>What to do next</h2><ol><li>Act.</li></ol>";
         let plan = [
             ReportSectionTreatment {
-                heading: "What changed".to_string(),
+                heading: "Unrelated display value".to_string(),
                 rhythm: ReportSectionRhythm::Anchor,
                 composition: ReportSectionComposition::Timeline,
             },
             ReportSectionTreatment {
-                heading: "What to do next".to_string(),
+                heading: "Another unrelated display value".to_string(),
                 rhythm: ReportSectionRhythm::Dense,
                 composition: ReportSectionComposition::Process,
             },

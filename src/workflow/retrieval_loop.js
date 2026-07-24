@@ -71,16 +71,6 @@
     ).filter((candidate) => !excludedIds.has(candidate.candidate_id));
   };
 
-  const transportSurface = (value) => {
-    const parsed = urlParts(value);
-    if (!parsed) {
-      return "";
-    }
-    const path = String(parsed.suffix || "/").split(/[?#]/, 1)[0];
-    const firstSegment = path.split("/").filter(Boolean)[0] || "";
-    return `${parsed.scheme}://${parsed.authority}/${firstSegment}`;
-  };
-
   const initialWebSourceAttempts = (
     initialCandidates,
     packet,
@@ -109,7 +99,6 @@
           candidate_id: candidate.candidate_id,
           url: candidate.url,
           title: candidate.title || "",
-          transport_surface: transportSurface(candidate.url),
           outcome: !source
             ? "fetch_failed"
             : (retained ? "retained" : "selection_empty"),
@@ -120,24 +109,8 @@
 
   const supplementalWebCandidates = (
     discovery,
-    excludedCandidates,
-    initialAttempts
-  ) => {
-    const candidates = remainingWebCandidates(discovery, excludedCandidates);
-    const failedSurfaces = new Set(
-      (Array.isArray(initialAttempts) ? initialAttempts : [])
-        .filter((attempt) => attempt.outcome === "fetch_failed")
-        .map((attempt) => attempt.transport_surface)
-        .filter(nonEmpty)
-    );
-    if (failedSurfaces.size === 0) {
-      return candidates;
-    }
-    const diversified = candidates.filter((candidate) =>
-      !failedSurfaces.has(transportSurface(candidate.url))
-    );
-    return diversified.length > 0 ? diversified : candidates;
-  };
+    excludedCandidates
+  ) => remainingWebCandidates(discovery, excludedCandidates);
 
   const supplementalWebSelectorInput = (
     plan,
@@ -150,8 +123,7 @@
   ) => {
     const candidates = supplementalWebCandidates(
       discovery,
-      excludedCandidates,
-      initialAttempts
+      excludedCandidates
     );
     const candidateIds = candidates.map((candidate) => candidate.candidate_id);
     const replacementMode = coverageGaps.length === 0 && operationalGapCount > 0;
@@ -180,7 +152,7 @@
           : operationalGapCount > 0
           ? "Select the smallest supplemental candidate set that closes the typed coverage gaps while also replacing evidence lost to fetch or source-selection failure in the first pass."
           : "Select the smallest supplemental candidate set with the strongest opportunity to close the typed coverage gaps left by the first retrieval pass.",
-        "Use initial_attempts as operational outcomes, not evidence. A fetch_failed transport surface has already retained no substantive text; when a semantically adequate alternative exists, use a different transport surface instead of another version or path on the failed surface. A selection_empty source needs a materially different artifact for the uncovered obligation, not a near-duplicate document.",
+        "Use initial_attempts only as typed operational outcomes. Initial candidate IDs are excluded from this closed supplemental catalog, and URL host, path, title wording, language, publisher, or text similarity must not be used as deterministic routing rules. Select replacements against the declared coverage gaps and evidence requirements.",
         "Use the exact candidate and obligation identities. Do not rewrite a provider query, URL, title, focus, criterion, or role.",
         "The packet may contain multiple languages or writing systems. Judge meaning across languages without keyword, token, spelling, morphology, transliteration, script, or language-routing rules.",
         "Candidate metadata is for semantic source admission only and never proves a report claim or source role. Fetched text will pass through the same closed semantic evidence selector.",
@@ -207,13 +179,11 @@
     discovery,
     excludedCandidates,
     selector,
-    fetchLimit,
-    initialAttempts
+    fetchLimit
   ) => {
     const candidates = supplementalWebCandidates(
       discovery,
-      excludedCandidates,
-      initialAttempts
+      excludedCandidates
     );
     if (fetchLimit <= 0 || candidates.length === 0) {
       return {
@@ -403,8 +373,7 @@
     ).length;
     const remainingCandidates = supplementalWebCandidates(
       settings.web_discovery,
-      initialCandidates,
-      initialAttempts
+      initialCandidates
     );
     const fetchLimit = Math.min(2, remainingCandidates.length);
     if (
@@ -454,67 +423,54 @@
       settings.web_discovery,
       initialCandidates,
       structuredOutput(outputs[STEP_SELECT_SUPPLEMENTAL_WEB]),
-      fetchLimit,
-      initialAttempts
+      fetchLimit
     );
     const sourceSelectorFailure = failures[STEP_SELECT_SUPPLEMENTAL_WEB] &&
       (failures[STEP_SELECT_SUPPLEMENTAL_WEB].error ||
         "supplemental source selection failed");
-    if (
-      sourceSelection.candidates.length > 0 &&
-      !outputs[STEP_SUPPLEMENTAL_WEB] &&
-      !failures[STEP_SUPPLEMENTAL_WEB]
-    ) {
+    const supplementalDiscoveryMetadata = {
+      coverage_gap_count: coverageGaps.length,
+      operational_gap_count: operationalGapCount,
+      failed_candidate_count: initialAttempts.filter((attempt) =>
+        attempt.outcome === "fetch_failed"
+      ).length,
+      supplemental_fetch_limit: fetchLimit,
+    };
+    const supplementalWebSteps = webSourceFetchSteps(
+      STEP_SUPPLEMENTAL_WEB_SOURCE_PREFIX,
+      plan,
+      sourceSelection.candidates,
+      "supplemental-web-source",
+      20,
+      settings.retrieval_retry
+    );
+    const pendingSupplementalWebSteps = supplementalWebSteps.filter((step) =>
+      !outputs[step.step_id] && !failures[step.step_id]
+    );
+    if (pendingSupplementalWebSteps.length > 0) {
       return {
         schedule: {
-          type: "schedule_step",
-          step_id: STEP_SUPPLEMENTAL_WEB,
-          step_name: STEP_SUPPLEMENTAL_WEB,
-          input: {
-            plan,
-            candidates: sourceSelection.candidates,
-            discovery_errors: uniqueStrings([
-              sourceSelectorFailure || "",
-              sourceSelection.error || "",
-            ]),
-            discovery_metadata: {
-              coverage_gap_count: coverageGaps.length,
-              operational_gap_count: operationalGapCount,
-              failed_transport_surface_count: new Set(
-                initialAttempts
-                  .filter((attempt) => attempt.outcome === "fetch_failed")
-                  .map((attempt) => attempt.transport_surface)
-                  .filter(nonEmpty)
-              ).size,
-              supplemental_fetch_limit: fetchLimit,
-            },
-            source_selection_mode: sourceSelection.mode,
-            source_id_prefix: "supplemental-web-source",
-            fetch_timeout_secs: 20,
-          },
-          retry: settings.retrieval_retry,
+          type: "schedule_steps",
+          steps: pendingSupplementalWebSteps,
         },
         selection: null,
         coverage_gaps: coverageGaps,
         attempted: true,
       };
     }
-    const retrieval = outputs[STEP_SUPPLEMENTAL_WEB] || {
-      status: "failed",
-      packet: null,
-      errors: uniqueStrings([
+    const retrieval = webRetrievalFromSourceSteps({
+      step_id_prefix: STEP_SUPPLEMENTAL_WEB_SOURCE_PREFIX,
+      plan,
+      candidates: sourceSelection.candidates,
+      outputs,
+      failures,
+      discovery_errors: uniqueStrings([
         sourceSelectorFailure || "",
         sourceSelection.error || "",
-        failures[STEP_SUPPLEMENTAL_WEB] &&
-          failures[STEP_SUPPLEMENTAL_WEB].error ||
-          "supplemental web retrieval did not complete",
       ]),
-      metadata: {
-        coverage_gap_count: coverageGaps.length,
-        operational_gap_count: operationalGapCount,
-        supplemental_fetch_limit: fetchLimit,
-      },
-    };
+      discovery_metadata: supplementalDiscoveryMetadata,
+      source_selection_mode: sourceSelection.mode,
+    });
     const supplementalPacket = packetForCoverageGaps(
       retrieval.packet,
       coverageGaps

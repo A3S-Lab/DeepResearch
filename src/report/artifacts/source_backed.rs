@@ -7,10 +7,6 @@ const SOURCE_CATALOG_MAX_CHUNKS_PER_PROPOSAL_SOURCE: usize = 4;
 const SOURCE_CATALOG_MAX_CHUNKS_PER_INELIGIBLE_REPORT_SOURCE: usize = 1;
 const SOURCE_CATALOG_MAX_CHUNK_CHARS: usize = 700;
 const SOURCE_CATALOG_MAX_TITLE_CHARS: usize = 240;
-const SOURCE_BACKED_ARTIFACT_MARKER: &str =
-    "A3S_DEEP_RESEARCH_ARTIFACT:source_backed:v1";
-const NO_EVIDENCE_ARTIFACT_MARKER: &str = "A3S_DEEP_RESEARCH_ARTIFACT:no_evidence:v1";
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeepResearchSourceCatalog {
     pub sources: Vec<DeepResearchCatalogSource>,
@@ -26,10 +22,11 @@ pub struct DeepResearchCatalogSource {
     pub chunks: Vec<String>,
     pub claim_eligible: bool,
     pub semantically_admitted: bool,
+    pub relevant_track_ids: Vec<String>,
     pub coverage: Vec<DeepResearchSourceCoverage>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DeepResearchSourceCoverage {
     pub track_id: String,
     pub completion_criterion_indexes: Vec<usize>,
@@ -37,9 +34,13 @@ pub struct DeepResearchSourceCoverage {
     pub independent: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum DeepResearchEvidenceFirstPublication {
     Synthesized,
+    Qualified,
     SourceBacked,
     NoEvidence,
 }
@@ -50,6 +51,10 @@ pub struct DeepResearchPublicationQuality {
     pub direct_answer_count: usize,
     pub finding_count: usize,
     pub accepted_claim_count: usize,
+    pub accepted_relation_count: usize,
+    pub accepted_derivation_count: usize,
+    pub accepted_basis_edge_count: usize,
+    pub accepted_gap_count: usize,
     pub cited_source_count: usize,
     pub substantive_character_count: usize,
     pub relevant_source_count: usize,
@@ -156,8 +161,9 @@ pub fn deep_research_source_catalog(
             catalog.omitted_source_count += 1;
             continue;
         };
-        let claim_eligible = semantic_source_admission;
         let coverage = catalog_source_coverage(raw_source, &source_id);
+        let relevant_track_ids = catalog_source_relevance(raw_source, &source_id);
+        let claim_eligible = semantic_source_admission && !relevant_track_ids.is_empty();
 
         let mut chunks = Vec::new();
         for raw_chunk in raw_chunks {
@@ -196,6 +202,12 @@ pub fn deep_research_source_catalog(
             let retained_source = &mut catalog.sources[index];
             retained_source.claim_eligible &= claim_eligible;
             retained_source.semantically_admitted |= semantic_source_admission;
+            for track_id in relevant_track_ids {
+                if !retained_source.relevant_track_ids.contains(&track_id) {
+                    retained_source.relevant_track_ids.push(track_id);
+                }
+            }
+            retained_source.relevant_track_ids.sort();
             for binding in coverage {
                 if !retained_source.coverage.contains(&binding) {
                     retained_source.coverage.push(binding);
@@ -218,6 +230,7 @@ pub fn deep_research_source_catalog(
             chunks,
             claim_eligible,
             semantically_admitted: semantic_source_admission,
+            relevant_track_ids,
             coverage,
         });
     }
@@ -311,12 +324,29 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let source_relevance = structured
+                .get("source_relevance")
+                .and_then(serde_json::Value::as_array)
+                .map(|bindings| {
+                    bindings
+                        .iter()
+                        .filter(|binding| {
+                            binding
+                                .get("source_id")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(source_id.as_str())
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             sources.push(serde_json::json!({
                 "source_id": source_id,
                 "title": source.get("title").cloned().unwrap_or(serde_json::Value::Null),
                 "url_or_path": source.get("url_or_path").cloned().unwrap_or(serde_json::Value::Null),
                 "reliability": source.get("reliability").cloned().unwrap_or(serde_json::Value::Null),
                 "chunks": chunks,
+                "source_relevance": source_relevance,
                 "source_coverage": source_coverage,
             }));
         }
@@ -341,6 +371,35 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
             "source_selection_mode": "semantic_chunk_ids_with_typed_coverage",
         },
     }))
+}
+
+fn catalog_source_relevance(
+    source: &serde_json::Value,
+    source_id: &str,
+) -> Vec<String> {
+    let mut retained = source
+        .get("source_relevance")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_object)
+        .filter(|binding| {
+            binding.len() == 2
+                && binding
+                    .get("source_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(source_id)
+        })
+        .filter_map(|binding| binding.get("obligation_id"))
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|track_id| stable_catalog_identity(track_id))
+        .take(8)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    retained.sort();
+    retained.dedup();
+    retained
 }
 
 fn catalog_source_coverage(
@@ -449,14 +508,71 @@ pub fn materialize_deep_research_source_backed_report(
     else {
         return Ok(None);
     };
-    let markdown = deep_research_source_backed_markdown(query, &catalog);
+    let slug = deep_research_report_slug(query);
+    materialize_deep_research_source_catalog_report(workspace, query, &slug, &catalog).map(Some)
+}
+
+/// Preserve a completed raw-acquisition checkpoint after its Host process was
+/// interrupted. The recovery identity is hashed into a separate artifact path,
+/// so this cannot overwrite a completed report for the same query or turn an
+/// opaque run ID into a path component.
+///
+/// Raw acquisition is audit-only by contract. If the supplied envelope already
+/// claims closed semantic admission, callers must resume the normal publication
+/// path instead of relabeling that output as an acquisition recovery.
+pub fn materialize_deep_research_acquisition_recovery_report(
+    workspace: &Path,
+    query: &str,
+    recovery_identity: &str,
+    workflow_output: &str,
+    workflow_metadata: Option<&serde_json::Value>,
+) -> Result<Option<ResearchReportArtifacts>, String> {
+    if recovery_identity.is_empty() {
+        return Err("acquisition recovery requires a non-empty run identity".to_string());
+    }
+    let Some(catalog) = deep_research_source_catalog(query, workflow_output, workflow_metadata)?
+    else {
+        return Ok(None);
+    };
+    if catalog
+        .sources
+        .iter()
+        .any(|source| source.claim_eligible || source.semantically_admitted)
+    {
+        return Err(
+            "acquisition recovery accepts only raw, non-admitted source checkpoints".to_string(),
+        );
+    }
+    let slug = deep_research_acquisition_recovery_slug(query, recovery_identity);
+    materialize_deep_research_source_catalog_report(workspace, query, &slug, &catalog).map(Some)
+}
+
+fn deep_research_acquisition_recovery_slug(query: &str, recovery_identity: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut digest = Sha256::new();
+    digest.update(recovery_identity.as_bytes());
+    let suffix = format!("{:x}", digest.finalize());
+    format!(
+        "{}-acquisition-recovery-{}",
+        deep_research_report_slug(query),
+        &suffix[..16]
+    )
+}
+
+fn materialize_deep_research_source_catalog_report(
+    workspace: &Path,
+    query: &str,
+    slug: &str,
+    catalog: &DeepResearchSourceCatalog,
+) -> Result<ResearchReportArtifacts, String> {
+    let markdown = deep_research_source_backed_markdown(query, catalog);
     let html = format!(
         "<!-- {SOURCE_BACKED_ARTIFACT_MARKER} -->\n{}",
         deep_research_degraded_report_html(query, &markdown)
     );
-    let slug = deep_research_report_slug(query);
     let rel_html = format!(".a3s/research/{slug}/index.html");
-    let (root, report_dir) = prepare_research_report_directory(workspace, &slug)?;
+    let (root, report_dir) = prepare_research_report_directory(workspace, slug)?;
     write_research_report_pair(
         &report_dir.join("report.md"),
         markdown,
@@ -466,7 +582,7 @@ pub fn materialize_deep_research_source_backed_report(
     let artifacts = trusted_research_report_artifact_paths(&rel_html, &root)
         .ok_or_else(|| "source-backed report artifacts failed path validation".to_string())?;
     source_backed_report_artifacts(&artifacts)
-        .then_some(Some(artifacts))
+        .then_some(artifacts)
         .ok_or_else(|| "source-backed report artifacts failed content validation".to_string())
 }
 
@@ -513,18 +629,16 @@ pub fn deep_research_evidence_first_published_report(
     if value.get("query").and_then(serde_json::Value::as_str) != Some(query) {
         return Err("evidence-first publication belongs to a different query".to_string());
     }
-    let publication = match value
+    let publication = value
         .pointer("/publication/status")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("synthesized") => DeepResearchEvidenceFirstPublication::Synthesized,
-        Some("source_backed") => DeepResearchEvidenceFirstPublication::SourceBacked,
-        Some("no_evidence") => DeepResearchEvidenceFirstPublication::NoEvidence,
-        Some(_) => return Err("evidence-first publication has an unknown status".to_string()),
-        None => return Err("evidence-first publication omitted its status".to_string()),
-    };
+        .cloned()
+        .ok_or_else(|| "evidence-first publication omitted its status".to_string())
+        .and_then(|status| {
+            serde_json::from_value::<DeepResearchEvidenceFirstPublication>(status)
+                .map_err(|_| "evidence-first publication has an unknown status".to_string())
+        })?;
     let quality = deep_research_publication_quality(&value)?;
-    validate_deep_research_publication_quality(query, publication, quality)?;
+    validate_deep_research_publication_quality(publication, quality)?;
     let slug = deep_research_report_slug(query);
     let expected = format!(".a3s/research/{slug}/index.html");
     let expected_markdown = format!(".a3s/research/{slug}/report.md");
@@ -545,7 +659,8 @@ pub fn deep_research_evidence_first_published_report(
     let artifacts = trusted_research_report_artifact_paths(&expected, workspace)
         .ok_or_else(|| "evidence-first publication artifacts failed path validation".to_string())?;
     let valid = match publication {
-        DeepResearchEvidenceFirstPublication::Synthesized => {
+        DeepResearchEvidenceFirstPublication::Synthesized
+        | DeepResearchEvidenceFirstPublication::Qualified => {
             completed_research_report_artifacts(&artifacts)
         }
         DeepResearchEvidenceFirstPublication::SourceBacked => {
@@ -579,17 +694,18 @@ fn deep_research_publication_quality(
             .and_then(|value| usize::try_from(value).ok())
             .ok_or_else(|| format!("evidence-first publication has an invalid `{name}` metric"))
     };
-    let research_scope = match quality
-        .get("research_scope")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("focused") => DeepResearchReportScope::Focused,
-        Some("comprehensive") => DeepResearchReportScope::Comprehensive,
-        Some(scope) => {
-            return Err(format!(
-                "evidence-first publication has unsupported research scope `{scope}`"
-            ))
-        }
+    let optional_metric = |name: &str| -> Result<usize, String> {
+        let Some(value) = quality.get(name) else {
+            return Ok(0);
+        };
+        value
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| format!("evidence-first publication has an invalid `{name}` metric"))
+    };
+    let research_scope = match quality.get("research_scope") {
+        Some(scope) => serde_json::from_value::<DeepResearchReportScope>(scope.clone())
+            .map_err(|_| "evidence-first publication has unsupported research scope".to_string())?,
         // Version-1 publications predate semantic scope in the quality
         // envelope. Preserve rediscovery without reclassifying their query.
         None => DeepResearchReportScope::Focused,
@@ -599,6 +715,10 @@ fn deep_research_publication_quality(
         direct_answer_count: metric("direct_answer_count")?,
         finding_count: metric("finding_count")?,
         accepted_claim_count: metric("accepted_claim_count")?,
+        accepted_relation_count: optional_metric("accepted_relation_count")?,
+        accepted_derivation_count: optional_metric("accepted_derivation_count")?,
+        accepted_basis_edge_count: optional_metric("accepted_basis_edge_count")?,
+        accepted_gap_count: optional_metric("accepted_gap_count")?,
         cited_source_count: metric("cited_source_count")?,
         // Version-1 evidence-first publications did not expose this metric.
         // Treating it as zero preserves focused reports while ensuring old
@@ -614,7 +734,6 @@ fn deep_research_publication_quality(
 }
 
 fn validate_deep_research_publication_quality(
-    _query: &str,
     publication: DeepResearchEvidenceFirstPublication,
     quality: DeepResearchPublicationQuality,
 ) -> Result<(), String> {
@@ -623,6 +742,15 @@ fn validate_deep_research_publication_quality(
         && quality.accepted_claim_count == 0
         && quality.cited_source_count == 0
         && quality.substantive_character_count == 0;
+    let empty_claim_graph = quality.accepted_relation_count == 0
+        && quality.accepted_derivation_count == 0
+        && quality.accepted_basis_edge_count == 0
+        && quality.accepted_gap_count == 0;
+    if quality.accepted_derivation_count > quality.accepted_claim_count
+        || (quality.accepted_claim_count == 0 && !empty_claim_graph)
+    {
+        return Err("publication reported inconsistent typed claim-graph metrics".to_string());
+    }
     match publication {
         DeepResearchEvidenceFirstPublication::Synthesized => {
             let requirements = deep_research_report_depth_requirements(quality.research_scope);
@@ -637,13 +765,33 @@ fn validate_deep_research_publication_quality(
                 || quality.relevant_source_count > quality.source_count
             {
                 return Err(
-                    "synthesized publication failed the query-scoped answer, depth, independent-source, or source-relevance quality gate"
+                    "synthesized publication failed the closed answer-depth, independent-source, or source-relevance quality gate"
+                        .to_string(),
+                );
+            }
+        }
+        DeepResearchEvidenceFirstPublication::Qualified => {
+            let requirements = deep_research_report_depth_requirements(quality.research_scope);
+            if quality.direct_answer_count < requirements.minimum_direct_answers
+                || quality.finding_count < requirements.minimum_findings
+                || quality.accepted_claim_count < requirements.minimum_claims
+                || quality.cited_source_count < requirements.minimum_cited_sources
+                || quality.substantive_character_count
+                    < requirements.minimum_substantive_characters
+                || quality.cited_source_count > quality.relevant_source_count
+                || quality.relevant_source_count == 0
+                || quality.relevant_source_count > quality.source_count
+                || quality.accepted_gap_count == 0
+            {
+                return Err(
+                    "qualified publication failed the closed answer-depth, evidence-gap, independent-source, or source-relevance quality gate"
                         .to_string(),
                 );
             }
         }
         DeepResearchEvidenceFirstPublication::SourceBacked => {
             if !empty_claims
+                || !empty_claim_graph
                 || quality.source_count == 0
                 || quality.relevant_source_count == 0
                 || quality.relevant_source_count > quality.source_count
@@ -655,7 +803,11 @@ fn validate_deep_research_publication_quality(
             }
         }
         DeepResearchEvidenceFirstPublication::NoEvidence => {
-            if !empty_claims || quality.source_count != 0 || quality.relevant_source_count != 0 {
+            if !empty_claims
+                || !empty_claim_graph
+                || quality.source_count != 0
+                || quality.relevant_source_count != 0
+            {
                 return Err("no-evidence publication reported evidence or claims".to_string());
             }
         }

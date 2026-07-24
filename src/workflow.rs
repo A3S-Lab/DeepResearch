@@ -52,5 +52,8 @@ mod tests {
         assert!(source.contains("combineMaterializedSelections"));
         assert!(!source.contains("fallbackCandidatePriority"));
         assert!(!source.contains("accountableAlternatives"));
+        assert!(!source.contains("tool output truncated:"));
+        assert!(!source.contains("more fetched content available"));
+        assert!(!source.contains("more lines available"));
     }
 }

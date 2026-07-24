@@ -102,7 +102,7 @@ mod source_anchor_tests {
 
         let summary = workflow_evidence_summary(&direct).expect("direct summary");
         assert!(
-            summary.contains("2 semantically selected source(s) across 2 host(s), 1 fetched across 1 host(s)"),
+            summary.contains("2 semantically selected source(s), 1 fetched source(s)"),
             "{summary}"
         );
         assert!(summary.contains("0/2 source(s) are dated"), "{summary}");
@@ -127,9 +127,59 @@ mod source_anchor_tests {
             "{summary}"
         );
         assert!(
-            summary.contains("4 semantically selected source(s) across 3 host(s), 2 fetched across 2 host(s)"),
+            summary.contains("4 semantically selected source(s), 2 fetched source(s)"),
             "{summary}"
         );
+    }
+
+    #[test]
+    fn workflow_summary_does_not_route_on_embedded_file_names() {
+        let output = |query: &str| {
+            serde_json::json!({
+                "query": query,
+                "mode": "direct_web",
+                "research": {
+                    "status": "success",
+                    "metadata": {
+                        "success_count": 1,
+                        "task_count": 1,
+                        "source_count": 1,
+                        "fetched_count": 1
+                    }
+                }
+            })
+            .to_string()
+        };
+
+        assert_eq!(
+            workflow_evidence_summary(&output("README.md")),
+            workflow_evidence_summary(&output("unrelated subject")),
+            "reader text must not alter a typed operational summary"
+        );
+    }
+
+    #[test]
+    fn legacy_collection_status_uses_typed_fields_not_mode_words() {
+        let value = serde_json::json!({
+            "mode": "not_failed_reader_label",
+            "research": {
+                "status": "success",
+                "results": [{
+                    "success": true,
+                    "structured": {
+                        "summary": "A typed result is complete.",
+                        "confidence": "high",
+                        "sources": [{
+                            "url_or_path": "https://example.test/evidence",
+                            "quote_or_fact": "The typed result is traceable."
+                        }]
+                    }
+                }]
+            },
+            "checker": {"decision": "finalize"}
+        });
+
+        assert_eq!(deep_research_collection_status(&value), "completed");
     }
 
     #[test]
@@ -466,22 +516,19 @@ mod source_anchor_tests {
     }
 
     #[test]
-    fn workflow_log_filter_respects_directory_boundaries() {
-        assert!(deep_research_output_has_internal_leak(
-            "diagnostic: .a3s/workflow/run-123.jsonl"
-        ));
-        assert!(deep_research_output_has_internal_leak(
-            r"diagnostic: .a3s\workflow\run-123.jsonl"
-        ));
-        assert!(deep_research_output_has_internal_leak(
-            "history is stored under `.a3s/workflow`"
-        ));
-        assert!(!deep_research_output_has_internal_leak(
-            "source: .a3s/workflows/operating-procedure.md"
-        ));
-        assert!(!deep_research_output_has_internal_leak(
-            "source: .a3s/workflow.asset.json"
-        ));
+    fn source_anchor_admission_does_not_classify_path_words() {
+        for anchor in [
+            ".a3s/workflow/run-123.jsonl",
+            r".a3s\workflow\run-123.jsonl",
+            ".a3s/workflows/operating-procedure.md",
+            ".a3s/workflow.asset.json",
+            "notes/DynamicWorkflowRuntime output.txt",
+        ] {
+            assert!(
+                normalize_research_source_anchor(anchor).is_some(),
+                "a structurally valid source anchor must not be classified by path words: {anchor}"
+            );
+        }
     }
 }
 

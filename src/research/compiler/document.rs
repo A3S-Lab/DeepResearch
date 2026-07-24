@@ -49,6 +49,7 @@ pub(super) struct ReportDimension {
 pub(super) struct ReportClaim {
     pub(super) id: String,
     pub(super) dimension_id: String,
+    pub(super) placement: ClaimPlacement,
     pub(super) kind: ClaimKind,
     pub(super) text: String,
     pub(super) evidence_refs: Vec<ClaimEvidenceRef>,
@@ -473,6 +474,7 @@ fn report_claim(
     ReportClaim {
         id: claim.id.clone(),
         dimension_id: claim.dimension_id.clone(),
+        placement: claim.placement,
         kind: claim.kind,
         text: claim.text.clone(),
         evidence_refs: claim.evidence_refs.clone(),

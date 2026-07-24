@@ -17,18 +17,13 @@ fn source_backed_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
     let (Some(markdown), Some(html)) = (markdown, html) else {
         return false;
     };
-    looks_like_deep_research_source_backed_report(&markdown)
-        && looks_like_deep_research_source_backed_report(&html)
-        && !looks_like_deep_research_no_evidence_report(&markdown)
-        && !looks_like_deep_research_no_evidence_report(&html)
-        && !looks_like_deep_research_fallback_draft(&markdown)
-        && !looks_like_deep_research_recovery_report(&markdown)
+    deep_research_artifact_pair_has_kind(
+        &markdown,
+        &html,
+        DeepResearchArtifactKind::SourceBacked,
+    )
         && complete_html_document(&html)
         && has_research_report_substance(&markdown, &html)
-}
-
-fn looks_like_deep_research_source_backed_report(text: &str) -> bool {
-    text.contains(SOURCE_BACKED_ARTIFACT_MARKER)
 }
 
 fn no_evidence_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
@@ -37,19 +32,12 @@ fn no_evidence_report_artifacts(artifacts: &ResearchReportArtifacts) -> bool {
     let (Some(markdown), Some(html)) = (markdown, html) else {
         return false;
     };
-    looks_like_deep_research_no_evidence_report(&markdown)
-        && looks_like_deep_research_no_evidence_report(&html)
-        && !looks_like_deep_research_fallback_draft(&markdown)
-        && !looks_like_deep_research_fallback_draft(&html)
-        && !looks_like_deep_research_recovery_report(&markdown)
-        && !looks_like_deep_research_recovery_report(&html)
-        && !deep_research_output_has_internal_leak(&markdown)
-        && !deep_research_output_has_internal_leak(&html)
+    deep_research_artifact_pair_has_kind(
+        &markdown,
+        &html,
+        DeepResearchArtifactKind::NoEvidence,
+    )
         && complete_html_document(&html)
-}
-
-fn looks_like_deep_research_no_evidence_report(text: &str) -> bool {
-    text.contains(NO_EVIDENCE_ARTIFACT_MARKER)
 }
 
 fn fenced_catalog_text(content: &str) -> String {

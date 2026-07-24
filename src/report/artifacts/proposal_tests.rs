@@ -29,7 +29,6 @@ fn report_proposal(mut value: serde_json::Value) -> serde_json::Value {
                 "answer": "Direct Answer",
                 "findings": "Findings",
                 "recommendations": "Evidence-Based Recommendations",
-                "boundary": "Evidence Boundary",
                 "limitations": "Limitations",
                 "evidence_boundary": "This report publishes no conclusion beyond the fetched evidence.",
                 "sources": "Sources"
@@ -42,6 +41,7 @@ fn report_proposal(mut value: serde_json::Value) -> serde_json::Value {
 fn proposal_schema_keeps_model_output_block_only() {
     let schema = deep_research_report_proposal_schema();
     let encoded = schema.to_string();
+    let labels = &schema["properties"]["labels"];
 
     assert!(encoded.contains("\"summary\""));
     assert!(encoded.contains("\"findings\""));
@@ -52,6 +52,57 @@ fn proposal_schema_keeps_model_output_block_only() {
     assert!(encoded.contains("\"labels\""));
     assert!(!encoded.contains("\"url\""));
     assert!(!encoded.contains("\"markdown\""));
+    assert!(
+        labels["properties"].get("boundary").is_none(),
+        "an admitted report always has a direct answer, so a no-answer heading is orphaned"
+    );
+    assert!(
+        labels["properties"]["answer"]["maxLength"]
+            .as_u64()
+            .is_some_and(|maximum| maximum >= 160),
+        "reader-facing headings must accommodate a planner-produced report title"
+    );
+    assert_eq!(
+        schema["properties"]["findings"]["items"]["properties"]["track_ids"]["maxItems"], 1,
+        "the schema must encode the one-track-per-finding admission invariant"
+    );
+    assert_eq!(
+        schema["properties"]["summary"]["items"]["properties"]["track_ids"]["maxItems"],
+        REPORT_PROPOSAL_MAX_TRACKS_PER_BLOCK,
+        "summary blocks may still connect multiple declared tracks"
+    );
+}
+
+#[test]
+fn proposal_schema_closes_references_to_the_current_catalog_and_plan() {
+    let mut catalog = focused_catalog();
+    catalog.sources.push(DeepResearchCatalogSource {
+        alias: "source-2".to_string(),
+        title: "Audit-only record".to_string(),
+        anchor: "https://example.test/audit-only".to_string(),
+        chunks: vec!["A retained audit-only excerpt.".to_string()],
+        claim_eligible: false,
+        semantically_admitted: false,
+        relevant_track_ids: Vec::new(),
+        coverage: Vec::new(),
+    });
+    let context = report_context(DeepResearchReportScope::Focused);
+
+    let schema = deep_research_report_proposal_schema_for(&catalog, &context)
+        .expect("close proposal schema");
+
+    for role in ["summary", "findings", "recommendations", "limitations"] {
+        assert_eq!(
+            schema["properties"][role]["items"]["properties"]["source_aliases"]["items"]["enum"],
+            serde_json::json!(["source-1"]),
+            "{role} source references must be exact packet aliases"
+        );
+        assert_eq!(
+            schema["properties"][role]["items"]["properties"]["track_ids"]["items"]["enum"],
+            serde_json::json!(["request.primary"]),
+            "{role} track references must be exact plan IDs"
+        );
+    }
 }
 
 #[test]
@@ -74,6 +125,10 @@ fn proposal_prompt_contains_semantic_scope_tracks_and_no_catalog_anchor() {
     assert!(prompt.contains("\"cited_sources\":2"));
     assert!(prompt.contains("\"coverage\""));
     assert!(!prompt.contains("https://docs.rs/nimbus"));
+    assert!(
+        prompt.contains("Never copy source aliases or track IDs into reader-facing text"),
+        "{prompt}"
+    );
 }
 
 #[test]
@@ -217,6 +272,51 @@ fn recommendation_padding_cannot_satisfy_comprehensive_depth() {
 }
 
 #[test]
+fn recommendation_can_resolve_a_material_advice_track() {
+    let (catalog, context, proposal) = comprehensive_recommendation_fixture(true);
+
+    let admitted = admit_deep_research_report_proposal_at(
+        "Assess the current state and provide adoption guidance",
+        "2026-07-23",
+        &catalog,
+        &context,
+        proposal,
+    )
+    .expect("evaluate comprehensive proposal")
+    .expect("typed recommendation coverage resolves the advice track");
+
+    assert_eq!(admitted.direct_answer_block_count, 1);
+    assert_eq!(admitted.finding_block_count, 4);
+    assert_eq!(admitted.accepted_claim_count, 6);
+    assert!(
+        admitted
+            .markdown
+            .contains("Use the documented decision boundary"),
+        "{}",
+        admitted.markdown
+    );
+}
+
+#[test]
+fn recommendation_cannot_resolve_a_material_track_without_exact_coverage() {
+    let (catalog, context, proposal) = comprehensive_recommendation_fixture(false);
+
+    let admitted = admit_deep_research_report_proposal_at(
+        "Assess the current state and provide adoption guidance",
+        "2026-07-23",
+        &catalog,
+        &context,
+        proposal,
+    )
+    .expect("evaluate comprehensive proposal");
+
+    assert!(
+        admitted.is_none(),
+        "reader prose cannot manufacture a typed coverage edge"
+    );
+}
+
+#[test]
 fn web_source_without_semantic_provenance_cannot_pass_the_strong_support_gate() {
     let catalog = DeepResearchSourceCatalog {
         sources: vec![DeepResearchCatalogSource {
@@ -229,6 +329,7 @@ fn web_source_without_semantic_provenance_cannot_pass_the_strong_support_gate() 
             ],
             claim_eligible: true,
             semantically_admitted: false,
+            relevant_track_ids: vec!["request.primary".to_string()],
             coverage: Vec::new(),
         }],
         omitted_source_count: 0,
@@ -342,21 +443,36 @@ fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
         track_ids: vec!["operational.risk".to_string()],
     };
 
-    assert!(report_material_tracks_have_closed_coverage(
+    assert!(report_material_tracks_are_resolved_or_bounded(
         &context,
         &catalog,
-        &[deployment.clone(), risk]
+        &[deployment.clone(), risk],
+        &[],
     ));
-    assert!(!report_material_tracks_have_closed_coverage(
+    assert!(!report_material_tracks_are_resolved_or_bounded(
         &context,
         &catalog,
-        std::slice::from_ref(&deployment)
+        std::slice::from_ref(&deployment),
+        &[],
     ));
     let without_independent = AdmittedReportBlock {
         source_indexes: vec![0],
         ..deployment
     };
-    assert!(!report_material_tracks_have_closed_coverage(
+    assert!(!report_material_tracks_are_resolved_or_bounded(
+        &context,
+        &catalog,
+        &[
+            without_independent.clone(),
+            AdmittedReportBlock {
+                text: "Risk evidence".to_string(),
+                source_indexes: vec![2],
+                track_ids: vec!["operational.risk".to_string()],
+            },
+        ],
+        &[],
+    ));
+    assert!(report_material_tracks_are_resolved_or_bounded(
         &context,
         &catalog,
         &[
@@ -366,7 +482,12 @@ fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
                 source_indexes: vec![2],
                 track_ids: vec!["operational.risk".to_string()],
             },
-        ]
+        ],
+        &[AdmittedReportBlock {
+            text: "The independent-source requirement remains bounded.".to_string(),
+            source_indexes: vec![0],
+            track_ids: vec!["deployment.boundary".to_string()],
+        }],
     ));
     let conflated_roles = DeepResearchSourceCatalog {
         sources: vec![
@@ -377,7 +498,7 @@ fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
         omitted_source_count: 0,
         omitted_chunk_count: 0,
     };
-    assert!(!report_material_tracks_have_closed_coverage(
+    assert!(!report_material_tracks_are_resolved_or_bounded(
         &context,
         &conflated_roles,
         &[
@@ -392,7 +513,139 @@ fn comprehensive_track_gate_requires_criteria_and_declared_source_roles() {
                 track_ids: vec!["operational.risk".to_string()],
             },
         ],
+        &[],
     ));
+}
+
+#[test]
+fn material_track_roles_cannot_be_conflated_across_completion_criteria() {
+    let (context, catalog) = criterion_scoped_role_fixture();
+    let claims = [
+        AdmittedReportBlock {
+            text: "The first criterion has one primary record.".to_string(),
+            source_indexes: vec![0],
+            track_ids: vec!["evidence.boundary".to_string()],
+        },
+        AdmittedReportBlock {
+            text: "The second criterion has one separately attributable record.".to_string(),
+            source_indexes: vec![1],
+            track_ids: vec!["evidence.boundary".to_string()],
+        },
+    ];
+
+    assert!(
+        !report_material_tracks_are_resolved_or_bounded(&context, &catalog, &claims, &[]),
+        "roles attached to different criteria cannot corroborate one another"
+    );
+}
+
+#[test]
+fn proposal_packet_exposes_exact_criterion_scoped_role_gaps() {
+    let (context, catalog) = criterion_scoped_role_fixture();
+    let prompt = deep_research_report_proposal_prompt_at(
+        "Assess the closed evidence boundary",
+        "2026-07-23",
+        &catalog,
+        &context,
+    )
+    .expect("closed report prompt");
+    let packet = serde_json::from_str::<serde_json::Value>(
+        prompt
+            .split_once("CLOSED_REPORT_PACKET=")
+            .expect("closed report packet marker")
+            .1,
+    )
+    .expect("decode closed report packet");
+    let state = &packet["typed_coverage_state"][0];
+
+    assert_eq!(state["track_id"], "evidence.boundary");
+    assert_eq!(
+        state["unsupported_criterion_indexes"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        state["missing_primary_source_criterion_indexes"],
+        serde_json::json!([1])
+    );
+    assert_eq!(
+        state["missing_independent_corroboration_criterion_indexes"],
+        serde_json::json!([0, 1])
+    );
+    assert_eq!(state["resolved_criterion_indexes"], serde_json::json!([]));
+}
+
+#[test]
+fn claim_relevance_and_completion_coverage_remain_distinct_contracts() {
+    let context = report_context(DeepResearchReportScope::Comprehensive);
+    let mut catalog = focused_catalog();
+    catalog.sources[0].coverage.clear();
+    let wire = || WireReportBlock {
+        text: "The retained source establishes one bounded atomic finding.".to_string(),
+        source_aliases: vec!["source-1".to_string()],
+        track_ids: vec!["request.primary".to_string()],
+    };
+    let claim = {
+        let admission = ReportAdmissionContext {
+            catalog: &catalog,
+            report_context: &context,
+        };
+        admit_report_block(&admission, wire(), ReportBlockRole::Finding)
+            .expect("exact relevance admits an atomic claim")
+    };
+
+    assert!(
+        !report_material_tracks_are_resolved_or_bounded(
+            &context,
+            &catalog,
+            std::slice::from_ref(&claim),
+            &[],
+        ),
+        "claim relevance must not manufacture completion-criterion coverage"
+    );
+    assert!(
+        report_material_tracks_are_resolved_or_bounded(
+            &context,
+            &catalog,
+            std::slice::from_ref(&claim),
+            &[AdmittedReportBlock {
+                text: "The remaining completion criterion is not closed.".to_string(),
+                source_indexes: vec![0],
+                track_ids: vec!["request.primary".to_string()],
+            }],
+        ),
+        "an exact-track limitation may bound the unresolved criterion"
+    );
+
+    catalog.sources[0].relevant_track_ids.clear();
+    let admission = ReportAdmissionContext {
+        catalog: &catalog,
+        report_context: &context,
+    };
+    assert!(
+        admit_report_block(&admission, wire(), ReportBlockRole::Finding).is_none(),
+        "reader prose cannot replace a missing exact relevance edge"
+    );
+}
+
+#[test]
+fn focused_claims_also_require_an_exact_track_relevance_edge() {
+    let context = report_context(DeepResearchReportScope::Focused);
+    let mut catalog = focused_catalog();
+    catalog.sources[0].relevant_track_ids = vec!["unrelated.track".to_string()];
+    let admission = ReportAdmissionContext {
+        catalog: &catalog,
+        report_context: &context,
+    };
+    let block = WireReportBlock {
+        text: "The retained source establishes one bounded atomic finding.".to_string(),
+        source_aliases: vec!["source-1".to_string()],
+        track_ids: vec!["request.primary".to_string()],
+    };
+
+    assert!(
+        admit_report_block(&admission, block, ReportBlockRole::Finding).is_none(),
+        "focused scope must not weaken the exact relevance contract"
+    );
 }
 
 #[test]
@@ -412,6 +665,7 @@ fn report_admission_is_isomorphic_across_unrelated_content() {
                 chunks: vec![source_text.to_string()],
                 claim_eligible: true,
                 semantically_admitted: true,
+                relevant_track_ids: vec!["request.primary".to_string()],
                 coverage: Vec::new(),
             }],
             omitted_source_count: 0,
@@ -446,7 +700,6 @@ fn report_admission_is_isomorphic_across_unrelated_content() {
             "answer": "Answer",
             "findings": "Findings",
             "recommendations": "Recommendations",
-            "boundary": "Boundary",
             "limitations": "Limitations",
             "evidence_boundary": "No conclusion is published beyond the fetched evidence.",
             "sources": "Sources"
@@ -461,7 +714,6 @@ fn report_admission_is_isomorphic_across_unrelated_content() {
             "answer": "回答",
             "findings": "发现",
             "recommendations": "建议",
-            "boundary": "边界",
             "limitations": "限制",
             "evidence_boundary": "报告不会发布超出已获取证据的结论。",
             "sources": "来源"
@@ -484,6 +736,56 @@ fn report_admission_is_isomorphic_across_unrelated_content() {
     );
 }
 
+#[test]
+fn reader_prose_never_changes_structural_report_admission() {
+    let mut catalog = focused_catalog();
+    catalog.sources[0].chunks = vec!["The source records C# syntax, the literal source-1 label, \
+         https://example.test/reference, www.example.test, [[brackets]], and \
+         CLOSED_REPORT_PACKET as quoted subject matter."
+        .to_string()];
+    let proposal = serde_json::json!({
+        "labels": {
+            "answer": "C# answer [reviewed]",
+            "findings": "Findings",
+            "recommendations": "Recommendations",
+            "limitations": "Limitations",
+            "evidence_boundary": "No conclusion is published beyond the fetched evidence.",
+            "sources": "Sources"
+        },
+        "summary": [{
+            "text": "The record discusses source-1 and https://example.test/reference as literal subject matter.",
+            "source_aliases": ["source-1"],
+            "track_ids": ["request.primary"]
+        }],
+        "findings": [{
+            "text": "It also preserves www.example.test, [[brackets]], and CLOSED_REPORT_PACKET verbatim.",
+            "source_aliases": ["source-1"],
+            "track_ids": ["request.primary"]
+        }],
+        "recommendations": [],
+        "limitations": []
+    });
+
+    let admitted =
+        admit_deep_research_report_proposal("Explain the retained notation", &catalog, proposal)
+            .expect("reader prose must be admitted from structural references")
+            .expect("focused report remains structurally complete");
+
+    assert_eq!(admitted.direct_answer_block_count, 1);
+    assert_eq!(admitted.finding_block_count, 1);
+    assert_eq!(admitted.accepted_claim_count, 2);
+    assert!(
+        admitted.markdown.contains("C# answer \\[reviewed\\]"),
+        "{}",
+        admitted.markdown
+    );
+    assert!(
+        admitted.markdown.contains("https://example.test/reference"),
+        "{}",
+        admitted.markdown
+    );
+}
+
 fn focused_catalog() -> DeepResearchSourceCatalog {
     DeepResearchSourceCatalog {
         sources: vec![DeepResearchCatalogSource {
@@ -496,6 +798,7 @@ fn focused_catalog() -> DeepResearchSourceCatalog {
             ],
             claim_eligible: true,
             semantically_admitted: true,
+            relevant_track_ids: vec!["request.primary".to_string()],
             coverage: Vec::new(),
         }],
         omitted_source_count: 0,
@@ -516,6 +819,7 @@ fn comprehensive_catalog() -> DeepResearchSourceCatalog {
                 ],
                 claim_eligible: true,
                 semantically_admitted: true,
+                relevant_track_ids: vec!["request.primary".to_string()],
                 coverage: vec![DeepResearchSourceCoverage {
                     track_id: "request.primary".to_string(),
                     completion_criterion_indexes: vec![0],
@@ -533,6 +837,7 @@ fn comprehensive_catalog() -> DeepResearchSourceCatalog {
                 ],
                 claim_eligible: true,
                 semantically_admitted: true,
+                relevant_track_ids: vec!["request.primary".to_string()],
                 coverage: vec![DeepResearchSourceCoverage {
                     track_id: "request.primary".to_string(),
                     completion_criterion_indexes: vec![0],
@@ -544,6 +849,151 @@ fn comprehensive_catalog() -> DeepResearchSourceCatalog {
         omitted_source_count: 0,
         omitted_chunk_count: 0,
     }
+}
+
+fn comprehensive_recommendation_fixture(
+    include_advice_coverage: bool,
+) -> (
+    DeepResearchSourceCatalog,
+    DeepResearchReportContext,
+    serde_json::Value,
+) {
+    let observed_coverage = |track_id: &str| DeepResearchSourceCoverage {
+        track_id: track_id.to_string(),
+        completion_criterion_indexes: vec![0],
+        primary: false,
+        independent: false,
+    };
+    let catalog = DeepResearchSourceCatalog {
+        sources: vec![
+            DeepResearchCatalogSource {
+                alias: "source-1".to_string(),
+                title: "First closed record".to_string(),
+                anchor: "https://source-1.example/research".to_string(),
+                chunks: vec!["First bounded evidence record.".to_string()],
+                claim_eligible: true,
+                semantically_admitted: true,
+                relevant_track_ids: vec!["observed.state".to_string()],
+                coverage: vec![observed_coverage("observed.state")],
+            },
+            DeepResearchCatalogSource {
+                alias: "source-2".to_string(),
+                title: "Second closed record".to_string(),
+                anchor: "https://source-2.example/research".to_string(),
+                chunks: vec!["Second bounded evidence record.".to_string()],
+                claim_eligible: true,
+                semantically_admitted: true,
+                relevant_track_ids: vec!["observed.state".to_string()],
+                coverage: vec![observed_coverage("observed.state")],
+            },
+            DeepResearchCatalogSource {
+                alias: "source-3".to_string(),
+                title: "Decision record".to_string(),
+                anchor: "https://source-3.example/research".to_string(),
+                chunks: vec!["Bounded decision evidence record.".to_string()],
+                claim_eligible: true,
+                semantically_admitted: true,
+                relevant_track_ids: vec!["decision.advice".to_string()],
+                coverage: include_advice_coverage
+                    .then(|| observed_coverage("decision.advice"))
+                    .into_iter()
+                    .collect(),
+            },
+        ],
+        omitted_source_count: 0,
+        omitted_chunk_count: 0,
+    };
+    let context = DeepResearchReportContext {
+        report_title: "Research report".to_string(),
+        scope: DeepResearchReportScope::Comprehensive,
+        freshness_required: false,
+        tracks: vec![
+            serde_json::json!({
+                "id": "observed.state",
+                "title": "Observed state",
+                "focus": "Establish the observed state from closed evidence.",
+                "material": true,
+                "completion_criteria": ["The observed state is explicitly supported."],
+                "evidence_requirements": {
+                    "primary_source_required": false,
+                    "independent_corroboration_required": false,
+                },
+            }),
+            serde_json::json!({
+                "id": "decision.advice",
+                "title": "Decision advice",
+                "focus": "Derive bounded advice from closed evidence.",
+                "material": true,
+                "completion_criteria": ["The decision boundary is explicitly supported."],
+                "evidence_requirements": {
+                    "primary_source_required": false,
+                    "independent_corroboration_required": false,
+                },
+            }),
+        ],
+    };
+    let proposal = report_proposal(serde_json::json!({
+        "summary": [{
+            "text": "The closed records establish the current operating boundary, documented implementation constraints, observed deployment conditions, and the decision factors required for a bounded assessment.",
+            "source_aliases": ["source-1"],
+            "track_ids": ["observed.state"]
+        }],
+        "findings": [{
+            "text": "Two independently attributable records identify the operating boundary while preserving its temporal and population scope without extending the conclusion beyond the observed setting.",
+            "source_aliases": ["source-1"],
+            "track_ids": ["observed.state"]
+        }, {
+            "text": "The retained evidence distinguishes documented implementation constraints from assumptions that were not established by the acquired material, keeping the resulting assessment explicitly bounded.",
+            "source_aliases": ["source-2"],
+            "track_ids": ["observed.state"]
+        }, {
+            "text": "Observed deployment conditions are represented as source-backed findings with exact provenance, so the report can explain both what is established and which conclusions remain outside the evidence.",
+            "source_aliases": ["source-1", "source-2"],
+            "track_ids": ["observed.state"]
+        }, {
+            "text": "The evidence supports a substantive comparison of the recorded operating state, implementation boundaries, and adoption conditions without deriving an unstated ranking or universal conclusion.",
+            "source_aliases": ["source-2"],
+            "track_ids": ["observed.state"]
+        }],
+        "recommendations": [{
+            "text": "Use the documented decision boundary to stage adoption, validate the stated constraints in the intended environment, and retain an explicit rollback condition for any premise not covered by the reviewed evidence.",
+            "source_aliases": ["source-3"],
+            "track_ids": ["decision.advice"]
+        }],
+        "limitations": []
+    }));
+    (catalog, context, proposal)
+}
+
+fn criterion_scoped_role_fixture() -> (DeepResearchReportContext, DeepResearchSourceCatalog) {
+    let context = DeepResearchReportContext {
+        report_title: "Research report".to_string(),
+        scope: DeepResearchReportScope::Comprehensive,
+        freshness_required: false,
+        tracks: vec![serde_json::json!({
+            "id": "evidence.boundary",
+            "title": "Evidence boundary",
+            "focus": "Resolve two independent completion criteria.",
+            "material": true,
+            "completion_criteria": [
+                "The first criterion is established.",
+                "The second criterion is established."
+            ],
+            "evidence_requirements": {
+                "primary_source_required": true,
+                "independent_corroboration_required": true,
+            },
+        })],
+    };
+    let catalog = DeepResearchSourceCatalog {
+        sources: vec![
+            coverage_source("source-1", "evidence.boundary", &[0], true, false),
+            coverage_source("source-2", "evidence.boundary", &[1], false, true),
+        ],
+        omitted_source_count: 0,
+        omitted_chunk_count: 0,
+    };
+    (context, catalog)
 }
 
 fn coverage_source(
@@ -560,6 +1010,7 @@ fn coverage_source(
         chunks: vec!["Closed evidence text.".to_string()],
         claim_eligible: true,
         semantically_admitted: true,
+        relevant_track_ids: vec![track_id.to_string()],
         coverage: vec![DeepResearchSourceCoverage {
             track_id: track_id.to_string(),
             completion_criterion_indexes: completion_criterion_indexes.to_vec(),

@@ -57,46 +57,58 @@ fn trusted_research_report_artifact_paths(
     let unresolved_path = if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
-        workspace.join(candidate)
+        root.join(candidate)
     };
-    let unresolved_metadata = std::fs::symlink_metadata(&unresolved_path).ok()?;
-    if unresolved_metadata.file_type().is_symlink() || !unresolved_metadata.is_file() {
+    if unresolved_path.file_name() != Some(std::ffi::OsStr::new("index.html")) {
         return None;
     }
-    let path = unresolved_path.canonicalize().ok()?;
-    if !is_nonempty_file(&path) || !path.starts_with(&root) || !is_html_path(&path) {
+    let unresolved_report_dir = unresolved_path.parent()?;
+    let report_dir_metadata = std::fs::symlink_metadata(unresolved_report_dir).ok()?;
+    if report_dir_metadata.file_type().is_symlink() || !report_dir_metadata.is_dir() {
         return None;
     }
-    let rel = path.strip_prefix(&root).ok()?;
+    let report_dir = unresolved_report_dir.canonicalize().ok()?;
+    let rel = report_dir.strip_prefix(&root).ok()?;
     let mut components = rel.components();
     let first = components.next()?.as_os_str();
     let second = components.next()?.as_os_str();
     let slug = components.next()?.as_os_str();
-    let file = components.next()?.as_os_str();
     if components.next().is_some() {
         return None;
     }
     if first != std::ffi::OsStr::new(".a3s") || second != std::ffi::OsStr::new("research") {
         return None;
     }
-    if slug.is_empty() || file != std::ffi::OsStr::new("index.html") {
+    if slug.is_empty() {
         return None;
     }
-    let markdown_path = path.parent()?.join("report.md");
+    let html_path = report_dir.join("index.html");
+    let markdown_path = report_dir.join("report.md");
+    recover_research_report_pair(&markdown_path, &html_path).ok()?;
+
+    let html_metadata = std::fs::symlink_metadata(&html_path).ok()?;
     let markdown_metadata = std::fs::symlink_metadata(&markdown_path).ok()?;
-    if markdown_metadata.file_type().is_symlink() || !markdown_metadata.is_file() {
+    if html_metadata.file_type().is_symlink()
+        || !html_metadata.is_file()
+        || markdown_metadata.file_type().is_symlink()
+        || !markdown_metadata.is_file()
+    {
         return None;
     }
+    let html = html_path.canonicalize().ok()?;
     let markdown = markdown_path.canonicalize().ok()?;
-    if !is_nonempty_file(&markdown)
-        || markdown.parent() != path.parent()
+    if !is_nonempty_file(&html)
+        || !is_nonempty_file(&markdown)
+        || html.parent() != Some(report_dir.as_path())
+        || markdown.parent() != Some(report_dir.as_path())
+        || !is_html_path(&html)
         || markdown.file_name() != Some(std::ffi::OsStr::new("report.md"))
     {
         return None;
     }
     Some(ResearchReportArtifacts {
         markdown,
-        html: path,
+        html,
     })
 }
 
@@ -106,18 +118,11 @@ fn completed_research_report_artifacts(artifacts: &ResearchReportArtifacts) -> b
     let (Some(markdown), Some(html)) = (markdown, html) else {
         return false;
     };
-    !looks_like_deep_research_fallback_draft(&markdown)
-        && !looks_like_deep_research_fallback_draft(&html)
-        && !looks_like_deep_research_recovery_report(&markdown)
-        && !looks_like_deep_research_recovery_report(&html)
-        && !looks_like_deep_research_source_backed_report(&markdown)
-        && !looks_like_deep_research_source_backed_report(&html)
-        && !looks_like_deep_research_no_evidence_report(&markdown)
-        && !looks_like_deep_research_no_evidence_report(&html)
-        && !is_deep_research_model_failure_text(&markdown)
-        && !is_deep_research_model_failure_text(&html)
-        && !deep_research_output_has_internal_leak(&markdown)
-        && !deep_research_output_has_internal_leak(&html)
+    deep_research_artifact_pair_has_kind(
+        &markdown,
+        &html,
+        DeepResearchArtifactKind::Synthesized,
+    )
         && complete_html_document(&html)
         && has_research_report_substance(&markdown, &html)
 }
@@ -383,8 +388,12 @@ fn read_small_utf8_file(path: &Path) -> Option<String> {
 }
 
 fn complete_html_document(html: &str) -> bool {
-    let lower = html.to_ascii_lowercase();
-    lower.contains("<html")
+    let Some(document) = html_document_after_optional_artifact_marker(html) else {
+        return false;
+    };
+    let lower = document.to_ascii_lowercase();
+    document.contains(DEEP_RESEARCH_HTML_DOCUMENT_ATTR)
+        && lower.contains("<html")
         && lower.contains("</html>")
         && lower.contains("<body")
         && lower.contains("</body>")
@@ -392,17 +401,23 @@ fn complete_html_document(html: &str) -> bool {
         && lower.contains("<title>")
         && lower.contains("</title>")
         && lower.contains("<style")
+        && lower.contains("<main")
+        && lower.contains("</main>")
+        && lower.contains("<article")
+        && lower.contains("</article>")
         && lower.matches("<h1").count() == 1
-        && lower.contains("@media")
-        && lower.contains("max-width")
-        && lower.contains("@media print")
-        && lower.contains(":focus")
-        && lower.contains("overflow-x")
-        && lower.contains("clamp(")
         && !lower.contains("<script")
-        && !lower.contains("body{display:none")
-        && !lower.contains("body {display:none")
-        && !lower.contains("font-size:0")
-        && !lower.contains("font-size:1px")
-        && !lower.contains("width:200vw")
+}
+
+fn html_document_after_optional_artifact_marker(html: &str) -> Option<&str> {
+    let trimmed = html.trim_start();
+    if trimmed.starts_with("<!doctype html>") {
+        return Some(trimmed);
+    }
+    let (first_line, remainder) = trimmed.split_once('\n')?;
+    deep_research_artifact_kind(first_line.trim())?;
+    let document = remainder.trim_start();
+    document
+        .starts_with("<!doctype html>")
+        .then_some(document)
 }

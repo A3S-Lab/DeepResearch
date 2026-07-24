@@ -559,66 +559,22 @@ fn reconcile_section_plan(
         return Ok(());
     }
 
-    // Presentation metadata is advisory. A model can finish a strong report and
-    // then rename, insert, or reorder one heading while constructing the private
-    // section plan. Reconcile that local drift deterministically instead of
-    // discarding the report and spending another model turn on unchanged prose.
-    let mut remaining = std::mem::take(section_plan)
-        .into_iter()
-        .enumerate()
-        .map(|(index, treatment)| Some((index, treatment)))
-        .collect::<Vec<_>>();
-    let mut reconciled = std::iter::repeat_with(|| None)
-        .take(markdown_headings.len())
-        .collect::<Vec<Option<ReportSectionTreatment>>>();
-
-    // Preserve treatments by semantic heading first, regardless of plan order.
-    for (markdown_index, heading) in markdown_headings.iter().enumerate() {
-        let normalized = normalize_section_heading(heading);
-        let Some(plan_index) = remaining.iter().position(|entry| {
-            entry.as_ref().is_some_and(|(_, treatment)| {
-                normalize_section_heading(&treatment.heading) == normalized
-            })
-        }) else {
-            continue;
-        };
-        let Some((_, mut treatment)) = remaining[plan_index].take() else {
-            continue;
-        };
-        treatment.heading = heading.clone();
-        reconciled[markdown_index] = Some(treatment);
+    // Array position is the only association between the private presentation
+    // plan and reader-facing sections. Heading text is inert display data: it
+    // cannot reorder, select, or recover a treatment.
+    let mut treatments = std::mem::take(section_plan).into_iter();
+    let mut reconciled = Vec::with_capacity(markdown_headings.len());
+    for heading in markdown_headings {
+        let mut treatment = treatments.next().unwrap_or_else(|| ReportSectionTreatment {
+            heading: String::new(),
+            rhythm: ReportSectionRhythm::Breathing,
+            composition: ReportSectionComposition::Prose,
+        });
+        treatment.heading = heading;
+        reconciled.push(treatment);
     }
 
-    // For renamed headings, retain the nearest unclaimed positional treatment.
-    // This keeps the model's content-driven rhythm/composition choice without
-    // pretending that stale metadata is an independently valid section.
-    for (markdown_index, heading) in markdown_headings.iter().enumerate() {
-        if reconciled[markdown_index].is_some() {
-            continue;
-        }
-        let nearest = remaining
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| {
-                entry
-                    .as_ref()
-                    .map(|(original_index, _)| (slot, original_index.abs_diff(markdown_index)))
-            })
-            .min_by_key(|(_, distance)| *distance)
-            .map(|(slot, _)| slot);
-        let mut treatment = nearest
-            .and_then(|slot| remaining[slot].take())
-            .map(|(_, treatment)| treatment)
-            .unwrap_or_else(|| ReportSectionTreatment {
-                heading: heading.clone(),
-                rhythm: ReportSectionRhythm::Breathing,
-                composition: ReportSectionComposition::Prose,
-            });
-        treatment.heading = heading.clone();
-        reconciled[markdown_index] = Some(treatment);
-    }
-
-    *section_plan = reconciled.into_iter().flatten().collect();
+    *section_plan = reconciled;
     Ok(())
 }
 
@@ -667,10 +623,6 @@ fn markdown_fence(line: &str) -> Option<(u8, usize, &str)> {
     }
     let length = line.bytes().take_while(|byte| *byte == marker).count();
     (length >= 3).then(|| (marker, length, &line[length..]))
-}
-
-fn normalize_section_heading(heading: &str) -> String {
-    clean_section_heading(heading).to_lowercase()
 }
 
 fn clean_section_heading(heading: &str) -> String {
@@ -858,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn report_generation_reorders_a_section_plan_into_report_order() {
+    fn report_generation_keeps_section_plan_order_without_heading_matching() {
         let markdown = format!(
             "# Report\n\n## Findings\n\n{}\n\n## Sources\n\n- https://example.com/source\n\n## Limitations\n\nBounded evidence.",
             "Substantive source-backed analysis. ".repeat(5)
@@ -880,11 +832,11 @@ mod tests {
         assert_eq!(headings, vec!["Findings", "Sources", "Limitations"]);
         assert_eq!(
             report.presentation.section_plan[0].composition,
-            ReportSectionComposition::KeyPoints
+            ReportSectionComposition::SourceLedger
         );
         assert_eq!(
             report.presentation.section_plan[1].composition,
-            ReportSectionComposition::SourceLedger
+            ReportSectionComposition::KeyPoints
         );
     }
 

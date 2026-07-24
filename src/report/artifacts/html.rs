@@ -11,6 +11,8 @@ mod style;
 use composition::compose_report_fragment;
 use style::REPORT_CSS;
 
+pub(super) const DEEP_RESEARCH_HTML_DOCUMENT_ATTR: &str = r#"data-a3s-deep-research-document="v1""#;
+
 pub(super) fn deep_research_completed_report_html(query: &str, markdown: &str) -> String {
     deep_research_report_html_with_state(query, markdown, None, None, ReportRenderState::Complete)
 }
@@ -92,7 +94,7 @@ fn deep_research_report_html_with_state(
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><style>:root{{--table-scroll-hint:'{table_scroll_hint}';}}{css}</style></head>
 <body class="{theme}">
 <header class="hero"><div class="hero-inner"><div class="hero-grid"><div><p class="eyebrow">{brief_label}</p><h1>{title}</h1><p class="hero-thesis">{thesis}</p><div class="signal-row"><span class="signal">● <b>{evidence_label}</b></span><span class="signal">{confidence_label}</span></div></div>{hero_support}</div></div></header>
-<main><div class="report-shell"><aside class="rail" aria-label="{metadata_label}"><p class="rail-label">{reading_label}</p>{toc}</aside><article id="report">{body}</article></div></main>
+<main {document_attr}><div class="report-shell"><aside class="rail" aria-label="{metadata_label}"><p class="rail-label">{reading_label}</p>{toc}</aside><article id="report">{body}</article></div></main>
 <p class="footer-note">{brief_label} · {evidence_label}</p>
 </body></html>
 "#,
@@ -108,6 +110,7 @@ fn deep_research_report_html_with_state(
         hero_support = hero_support,
         metadata_label = labels.metadata,
         reading_label = labels.reading,
+        document_attr = DEEP_RESEARCH_HTML_DOCUMENT_ATTR,
         toc = composition.toc,
         body = composition.body,
     )

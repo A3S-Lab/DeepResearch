@@ -1,4 +1,4 @@
-use super::frozen_fixture::{load_frozen_replays, FrozenReplay};
+use super::frozen_fixture::{load_frozen_replays, FrozenFault, FrozenReplay};
 use super::*;
 
 fn replay(case_id: &str) -> FrozenReplay {
@@ -36,7 +36,10 @@ fn html_escape(value: &str) -> String {
 #[test]
 fn markdown_and_html_project_the_same_frozen_document_content() {
     for replay in load_frozen_replays() {
-        let document = if replay.fault_stage.as_deref() == Some("report_generation") {
+        let document = if matches!(
+            replay.fault.as_ref(),
+            Some(FrozenFault::ReportGenerationTimeout)
+        ) {
             build_source_backed_document(&replay.contract, &replay.catalog)
                 .expect("source-backed frozen document")
         } else {

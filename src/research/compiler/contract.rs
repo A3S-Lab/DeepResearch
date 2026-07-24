@@ -44,6 +44,7 @@ pub(super) enum QueryMode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SourceRole {
+    Supporting,
     Canonical,
     Official,
     Primary,

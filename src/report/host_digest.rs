@@ -470,63 +470,17 @@ pub(super) fn deep_research_compact_json_text(value: &serde_json::Value, limit: 
 
 pub(super) fn deep_research_digest_text(text: &str, limit: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.is_empty() {
-        return compact;
-    }
-    if deep_research_output_has_internal_leak(&compact) {
-        return "Internal workflow/tool log text withheld from DeepResearch synthesis.".to_string();
-    }
     deep_research_truncate_chars(&compact, limit)
 }
 
 pub(super) fn deep_research_error_or_digest_text(
     value: &serde_json::Value,
-    limit: usize,
+    _limit: usize,
 ) -> String {
-    let text = value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default());
-    if deep_research_output_has_internal_leak(&text) {
-        deep_research_failure_summary(&serde_json::Value::String(text))
-    } else {
-        deep_research_digest_text(&text, limit)
-    }
+    deep_research_failure_summary(value)
 }
 
-pub(super) fn deep_research_failure_summary(value: &serde_json::Value) -> String {
-    let text = value
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default());
-    let lower = text.to_ascii_lowercase();
-    if lower.contains("permission denied: tool") || lower.contains("permission policy denied") {
-        return "Delegated task could not use a requested tool because the permission policy denied it.".to_string();
-    }
-    if lower.contains("max tool rounds") || lower.contains("tool-round budget") {
-        return "Delegated task exhausted its tool-round budget before returning usable evidence."
-            .to_string();
-    }
-    if lower.contains("timed out") || lower.contains("[command timed out") {
-        return "Delegated task timed out before returning usable evidence.".to_string();
-    }
-    if lower.contains("[tool output truncated")
-        || lower.contains("full output artifact:")
-        || lower.contains("a3s://tool-output")
-    {
-        return "Delegated task produced oversized tool output that was withheld from the report context.".to_string();
-    }
-    if deep_research_contains_workflow_store_reference(&lower)
-        || lower.contains("● searched")
-        || lower.contains("● ran")
-        || lower.contains("● read")
-        || lower.contains("• searched")
-        || lower.contains("• ran")
-        || lower.contains("• read")
-        || text.contains('⎿')
-    {
-        return "Delegated task returned internal workflow/tool logs that were withheld from the report context.".to_string();
-    }
+pub(super) fn deep_research_failure_summary(_value: &serde_json::Value) -> String {
     "Delegated task failed before returning usable evidence.".to_string()
 }
 

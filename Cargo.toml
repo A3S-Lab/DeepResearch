@@ -1,6 +1,6 @@
 [package]
 name = "a3s-deep-research"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Evidence-first, domain-agnostic deep research engine for A3S"
 license = "MIT"

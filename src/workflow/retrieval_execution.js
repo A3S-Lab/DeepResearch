@@ -2,10 +2,7 @@
     if (inputs.step_name === STEP_DISCOVER_WEB) {
       return await discoverWeb(object(inputs.input));
     }
-    if (
-      inputs.step_name === STEP_WEB ||
-      inputs.step_name === STEP_SUPPLEMENTAL_WEB
-    ) {
+    if (inputs.step_name === STEP_WEB_SOURCE) {
       return await collectWeb(object(inputs.input));
     }
     if (inputs.step_name === STEP_LOCAL) {
@@ -135,32 +132,21 @@
           bootstrapSelectorFailure
         )
       : { candidates: [], mode: "none", error: "" };
-    if (
-      needsWeb &&
-      bootstrapSelection.candidates.length > 0 &&
-      !outputs[STEP_WEB] &&
-      !failures[STEP_WEB]
-    ) {
+    const bootstrapWebSteps = webSourceFetchSteps(
+      STEP_WEB_SOURCE_PREFIX,
+      plan,
+      bootstrapSelection.candidates,
+      "bootstrap-web-source",
+      20,
+      retrievalRetry
+    );
+    const pendingBootstrapWebSteps = bootstrapWebSteps.filter((step) =>
+      !outputs[step.step_id] && !failures[step.step_id]
+    );
+    if (needsWeb && pendingBootstrapWebSteps.length > 0) {
       return {
-        type: "schedule_step",
-        step_id: STEP_WEB,
-        step_name: STEP_WEB,
-        input: {
-          plan,
-          candidates: bootstrapSelection.candidates,
-          discovery_errors: uniqueStrings([
-            ...(Array.isArray(bootstrapDiscovery.errors)
-              ? bootstrapDiscovery.errors
-              : []),
-            bootstrapSelectorFailure || "",
-            bootstrapSelection.error || "",
-          ]),
-          discovery_metadata: object(bootstrapDiscovery.metadata),
-          source_selection_mode: bootstrapSelection.mode,
-          source_id_prefix: "bootstrap-web-source",
-          fetch_timeout_secs: 20,
-        },
-        retry: retrievalRetry,
+        type: "schedule_steps",
+        steps: pendingBootstrapWebSteps,
       };
     }
     if (needsLocal && !outputs[STEP_LOCAL] && !failures[STEP_LOCAL]) {
@@ -177,23 +163,21 @@
       };
     }
     const bootstrapWeb = needsWeb
-      ? (outputs[STEP_WEB] || {
-          status: "failed",
-          packet: null,
-          errors: uniqueStrings([
+      ? webRetrievalFromSourceSteps({
+          step_id_prefix: STEP_WEB_SOURCE_PREFIX,
+          plan,
+          candidates: bootstrapSelection.candidates,
+          outputs,
+          failures,
+          discovery_errors: uniqueStrings([
             ...(Array.isArray(bootstrapDiscovery.errors)
               ? bootstrapDiscovery.errors
               : []),
             bootstrapSelectorFailure || "",
             bootstrapSelection.error || "",
-            failures[STEP_WEB] && failures[STEP_WEB].error ||
-              "bootstrap web retrieval did not complete",
           ]),
-          metadata: Object.assign({}, object(bootstrapDiscovery.metadata), {
-            source_selection_mode: bootstrapSelection.mode,
-            selected_candidate_count: 0,
-            fetched_count: 0,
-          }),
+          discovery_metadata: object(bootstrapDiscovery.metadata),
+          source_selection_mode: bootstrapSelection.mode,
         })
       : null;
     const bootstrapLocal = needsLocal
@@ -346,29 +330,21 @@
         webSourceSelectorFailure
       )
     : { candidates: [], mode: "none", error: "" };
-  if (
-    hasPlannedWebDiscovery &&
-    webSourceSelection.candidates.length > 0 &&
-    !outputs[STEP_WEB] &&
-    !failures[STEP_WEB]
-  ) {
+  const plannedWebSteps = webSourceFetchSteps(
+    STEP_WEB_SOURCE_PREFIX,
+    plan,
+    webSourceSelection.candidates,
+    "web-source",
+    20,
+    retrievalRetry
+  );
+  const pendingPlannedWebSteps = plannedWebSteps.filter((step) =>
+    !outputs[step.step_id] && !failures[step.step_id]
+  );
+  if (hasPlannedWebDiscovery && pendingPlannedWebSteps.length > 0) {
     return {
-      type: "schedule_step",
-      step_id: STEP_WEB,
-      step_name: STEP_WEB,
-      input: {
-        plan,
-        candidates: webSourceSelection.candidates,
-        discovery_errors: uniqueStrings([
-          ...(Array.isArray(webDiscovery.errors) ? webDiscovery.errors : []),
-          webSourceSelectorFailure || "",
-          webSourceSelection.error || "",
-        ]),
-        discovery_metadata: object(webDiscovery.metadata),
-        source_selection_mode: webSourceSelection.mode,
-        fetch_timeout_secs: 20,
-      },
-      retry: retrievalRetry,
+      type: "schedule_steps",
+      steps: pendingPlannedWebSteps,
     };
   }
   if (needsLocal && !outputs[STEP_LOCAL] && !failures[STEP_LOCAL]) {
@@ -399,21 +375,19 @@
       }
     : null;
   const webRetrieval = hasPlannedWebDiscovery
-    ? (outputs[STEP_WEB] || {
-        status: "failed",
-        packet: null,
-        errors: uniqueStrings([
+    ? webRetrievalFromSourceSteps({
+        step_id_prefix: STEP_WEB_SOURCE_PREFIX,
+        plan,
+        candidates: webSourceSelection.candidates,
+        outputs,
+        failures,
+        discovery_errors: uniqueStrings([
           ...(Array.isArray(webDiscovery.errors) ? webDiscovery.errors : []),
           webSourceSelectorFailure || "",
           webSourceSelection.error || "",
-          failures[STEP_WEB] && failures[STEP_WEB].error ||
-            "web retrieval did not complete",
         ]),
-        metadata: Object.assign({}, object(webDiscovery.metadata), {
-          source_selection_mode: webSourceSelection.mode,
-          selected_candidate_count: 0,
-          fetched_count: 0,
-        }),
+        discovery_metadata: object(webDiscovery.metadata),
+        source_selection_mode: webSourceSelection.mode,
       })
     : null;
   const localRetrieval = needsLocal

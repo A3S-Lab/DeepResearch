@@ -337,6 +337,33 @@ fn print_layout_does_not_expand_every_inline_link_or_pin_large_tables() {
 }
 
 #[test]
+fn print_layout_resets_viewport_art_direction_offsets_to_the_page_box() {
+    let html = deep_research_completed_report_html_with_presentation(
+        "Printable shifted report",
+        "# Printable shifted report\n\n## Findings\n\nA long paragraph must remain inside the printable page box.",
+        Some(&ReportPresentation {
+            visual_stance: ReportVisualStance::Shifted,
+            ..ReportPresentation::default()
+        }),
+        Some("The screen composition may be shifted without moving print content off-page."),
+    );
+
+    assert!(
+        html.contains(
+            "article, .report-section, .section-body { width: 100%; max-width: 100%; min-width: 0; }"
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains(
+            ".rhythm-breathing, body.stance-shifted .rhythm-breathing { width: 100%; margin-left: 0; margin-right: 0; }"
+        ),
+        "{html}"
+    );
+    assert!(html.contains("ol { padding-left: 2.2rem; }"), "{html}");
+}
+
+#[test]
 fn editorial_report_counts_unique_external_source_urls() {
     let html = deep_research_completed_report_html(
         "Source count",

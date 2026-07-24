@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::report::{AdmittedDeepResearchReport, ResearchReportArtifacts};
+use crate::report::{
+    AdmittedDeepResearchReport, DeepResearchPublicationQuality, ResearchReportArtifacts,
+};
 
 mod execution;
 
@@ -140,16 +142,23 @@ pub struct WorkflowOutput {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PublicationRequest {
     SourceBacked {
+        run_id: String,
         query: String,
         workflow_output: String,
         workflow_metadata: Option<Value>,
+        quality: DeepResearchPublicationQuality,
     },
     Synthesized {
+        run_id: String,
         query: String,
         report: AdmittedDeepResearchReport,
+        publication: crate::report::DeepResearchEvidenceFirstPublication,
+        quality: DeepResearchPublicationQuality,
     },
     NoEvidence {
+        run_id: String,
         query: String,
+        quality: DeepResearchPublicationQuality,
     },
 }
 

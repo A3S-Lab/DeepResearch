@@ -15,6 +15,7 @@ pub fn materialize_deep_research_fallback_draft(
     let query_markdown = markdown_plain_text(query);
     let markdown = format!(
         "# DeepResearch Fallback Draft\n\n\
+         <!-- {FALLBACK_ARTIFACT_MARKER} -->\n\n\
          > This is an incomplete fallback draft. It is not a completed DeepResearch report and \
          should not be opened automatically as a final RemoteUI view.\n\n\
          ## Query\n\n{query_markdown}\n\n\
@@ -24,7 +25,8 @@ pub fn materialize_deep_research_fallback_draft(
          {artifact_note}\n"
     );
     let html = format!(
-        "<!doctype html>\n\
+        "<!-- {FALLBACK_ARTIFACT_MARKER} -->\n\
+         <!doctype html>\n\
          <html lang=\"en\">\n\
          <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>DeepResearch Fallback Draft</title>\
          <style>body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.6;margin:0;background:#f7f7f7;color:#111}}main{{max-width:920px;margin:0 auto;padding:32px 20px}}.banner{{border-left:4px solid #b45309;background:#fff7ed;padding:14px 16px;margin:16px 0}}section{{background:#fff;border:1px solid #ddd;border-radius:8px;padding:20px;margin:16px 0}}pre{{white-space:pre-wrap;word-break:break-word;background:#111;color:#f5f5f5;border-radius:6px;padding:16px;overflow:auto}}</style></head>\n\
@@ -103,49 +105,19 @@ fn deep_research_fallback_evidence(workflow_output: &str) -> String {
     let evidence = deep_research_prompt_workflow_output(workflow_output);
     if evidence.trim().is_empty() {
         "{}".to_string()
-    } else if deep_research_output_has_internal_leak(&evidence) {
-        serde_json::json!({
-            "status": "internal_logs_withheld",
-            "note": "A3S Code captured diagnostics, but raw tool logs are not written into DeepResearch fallback artifacts."
-        })
-        .to_string()
     } else {
         evidence
     }
 }
 
-fn deep_research_fallback_answer(answer_text: &str, workflow_output: &str) -> String {
-    let answer = answer_text.trim();
-    if !answer.is_empty()
-        && !is_deep_research_model_failure_text(answer)
-        && !deep_research_output_has_internal_leak(answer)
-    {
-        return answer.to_string();
-    }
+fn deep_research_fallback_answer(_answer_text: &str, workflow_output: &str) -> String {
     workflow_evidence_summary(workflow_output).unwrap_or_else(|| {
         "The model did not return a final synthesis, but A3S Code preserved a sanitized workflow evidence digest below.".to_string()
     })
 }
 
-fn is_deep_research_model_failure_text(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    // Keep historical pre-sectioned diagnostic spellings from being promoted
-    // when an older interrupted run is recovered. Active report content uses
-    // targeted revision and durable-resume terminology.
-    lower.contains("deepresearch synthesis model call timed out")
-        || lower.contains("deepresearch synthesis model call failed")
-        || lower.contains("deepresearch repair model call timed out")
-        || lower.contains("deepresearch repair model call failed")
-}
-
-fn deep_research_fallback_artifact_note(answer_text: &str) -> String {
-    let answer = answer_text.trim();
-    let mut note = "This fallback draft was materialized by A3S Code because the model response did not create the required completed report artifacts.".to_string();
-    if !answer.is_empty() && is_deep_research_model_failure_text(answer) {
-        note.push_str("\n\nModel synthesis status: ");
-        note.push_str(answer);
-    }
-    note
+fn deep_research_fallback_artifact_note(_answer_text: &str) -> String {
+    "This fallback draft was materialized by A3S Code because the typed publication contract did not produce completed report artifacts.".to_string()
 }
 
 pub fn workflow_evidence_summary(workflow_output: &str) -> Option<String> {
@@ -203,28 +175,17 @@ pub fn workflow_evidence_summary(workflow_output: &str) -> Option<String> {
         summary.push(' ');
         summary.push_str(&coverage);
     }
-    if workflow_output.contains("README.md") {
-        summary.push_str(" The evidence includes `README.md` as a cited local source.");
-    }
     Some(summary)
 }
 
 fn direct_web_coverage_summary(metadata: &serde_json::Value) -> Option<String> {
     let source_count = metadata.get("source_count")?.as_u64()?;
-    let host_count = metadata
-        .get("host_count")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
     let fetched_count = metadata
         .get("fetched_count")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let fetched_host_count = metadata
-        .get("fetched_host_count")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
     let mut summary = format!(
-        "Web coverage: {source_count} semantically selected source(s) across {host_count} host(s), {fetched_count} fetched across {fetched_host_count} host(s)."
+        "Web coverage: {source_count} semantically selected source(s), {fetched_count} fetched source(s)."
     );
     if metadata
         .get("freshness_required")

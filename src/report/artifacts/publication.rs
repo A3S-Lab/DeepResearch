@@ -154,66 +154,6 @@ fn write_research_report_file(path: &Path, contents: impl AsRef<[u8]>) -> Result
     result
 }
 
-fn existing_research_report_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("could not preserve {}: {error}", path.display())),
-    }
-}
-
-fn restore_research_report_file(path: &Path, contents: Option<&[u8]>) -> Result<(), String> {
-    match contents {
-        Some(contents) => write_research_report_file(path, contents),
-        None => match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("could not roll back {}: {error}", path.display())),
-        },
-    }
-}
-
-fn write_research_report_pair(
-    markdown_path: &Path,
-    markdown: impl AsRef<[u8]>,
-    html_path: &Path,
-    html: impl AsRef<[u8]>,
-) -> Result<(), String> {
-    // Validate both destinations before touching either current generation.
-    validate_research_report_file_target(markdown_path)?;
-    validate_research_report_file_target(html_path)?;
-    let previous_markdown = existing_research_report_file(markdown_path)?;
-    let previous_html = existing_research_report_file(html_path)?;
-    let staged_markdown = stage_research_report_file(markdown_path, markdown.as_ref())?;
-    let staged_html = match stage_research_report_file(html_path, html.as_ref()) {
-        Ok(staged) => staged,
-        Err(error) => {
-            let _ = std::fs::remove_file(staged_markdown);
-            return Err(error);
-        }
-    };
-
-    if let Err(error) = replace_staged_research_report_file(&staged_markdown, markdown_path) {
-        let _ = std::fs::remove_file(staged_markdown);
-        let _ = std::fs::remove_file(staged_html);
-        let _ = restore_research_report_file(markdown_path, previous_markdown.as_deref());
-        return Err(error);
-    }
-    if let Err(error) = replace_staged_research_report_file(&staged_html, html_path) {
-        let _ = std::fs::remove_file(staged_html);
-        let markdown_rollback =
-            restore_research_report_file(markdown_path, previous_markdown.as_deref());
-        let html_rollback = restore_research_report_file(html_path, previous_html.as_deref());
-        return match (markdown_rollback, html_rollback) {
-            (Ok(()), Ok(())) => Err(error),
-            (markdown, html) => Err(format!(
-                "{error}; report pair rollback failed: markdown={markdown:?}, html={html:?}"
-            )),
-        };
-    }
-    Ok(())
-}
-
 pub fn research_report_artifacts_from_output(
     output: &str,
     workspace: &Path,
@@ -254,9 +194,6 @@ pub fn clean_deep_research_final_text_from_artifacts(
     workspace: &Path,
 ) -> Option<String> {
     let markdown = read_small_utf8_file(&artifacts.markdown)?;
-    if deep_research_output_has_internal_leak(&markdown) {
-        return None;
-    }
     let root = workspace.canonicalize().ok()?;
     let rel_html = artifacts.html.strip_prefix(&root).ok()?.to_string_lossy();
     let rel_html = rel_html.replace('\\', "/");
@@ -301,6 +238,7 @@ pub fn materialize_deep_research_recovery_report(
     let query_markdown = markdown_plain_text(query);
     let markdown = format!(
         "# DeepResearch Recovery Report\n\n\
+         <!-- {RECOVERY_ARTIFACT_MARKER} -->\n\n\
          ## Query\n\n{query_markdown}\n\n\
          ## Findings\n\n{result}\n\n\
          ## Sources And Evidence\n\n{sources}\n\n\
@@ -317,7 +255,10 @@ pub fn materialize_deep_research_recovery_report(
          - Use this run artifact at `.a3s/research/{slug}/report.md` as the local record of \
          why the original run could not produce a fully source-backed answer.\n"
     );
-    let html = deep_research_degraded_report_html(query, &markdown);
+    let html = format!(
+        "<!-- {RECOVERY_ARTIFACT_MARKER} -->\n{}",
+        deep_research_degraded_report_html(query, &markdown)
+    );
     write_research_report_pair(
         &report_dir.join("report.md"),
         markdown,
@@ -374,10 +315,7 @@ pub fn deep_research_workflow_needs_recovery_report_with_metadata(
 fn normalize_report_markdown_candidate(query: &str, answer_text: &str) -> Option<String> {
     let mut body = answer_text.trim().to_string();
     if body.is_empty()
-        || looks_like_deep_research_fallback_draft(&body)
-        || looks_like_deep_research_recovery_report(&body)
-        || is_deep_research_model_failure_text(&body)
-        || deep_research_output_has_internal_leak(&body)
+        || deep_research_artifact_kind(&body).is_some()
         || visible_char_count(&body) < 120
     {
         return None;
@@ -413,26 +351,11 @@ fn validate_deep_research_completed_report_content(
     // have been committed to the replayable event log. Legacy checked-loop
     // outputs return `Ok(None)` and retain their existing validation path.
     deep_research_inquiry_publication_outcome(workflow_output, workflow_metadata)?;
-    if looks_like_deep_research_fallback_draft(markdown) {
-        return Err("content rejected: the response is an incomplete fallback draft".to_string());
-    }
-    if looks_like_deep_research_recovery_report(markdown) {
-        return Err(
-            "content rejected: a recovery report cannot be published as a completed report"
-                .to_string(),
-        );
-    }
-    if is_deep_research_model_failure_text(markdown) {
-        return Err(
-            "content rejected: the response contains a model or tool failure message".to_string(),
-        );
-    }
-    if deep_research_output_has_internal_leak(markdown)
-        || deep_research_output_has_internal_leak(html)
+    if deep_research_artifact_kind(markdown).is_some()
+        || deep_research_artifact_kind(html).is_some()
     {
         return Err(
-            "content rejected: the report contains internal workflow or tool-status text"
-                .to_string(),
+            "content rejected: generated content contains a reserved artifact marker".to_string(),
         );
     }
     if visible_char_count(markdown.trim()) < 120 {
@@ -470,24 +393,9 @@ pub fn deep_research_report_rejection_diagnostic_from_answer_text(
     if answer.is_empty() {
         return Some("content rejected: the model returned an empty report".to_string());
     }
-    if looks_like_deep_research_fallback_draft(answer) {
-        return Some("content rejected: the response is an incomplete fallback draft".to_string());
-    }
-    if looks_like_deep_research_recovery_report(answer) {
+    if deep_research_artifact_kind(answer).is_some() {
         return Some(
-            "content rejected: a recovery report cannot be published as a completed report"
-                .to_string(),
-        );
-    }
-    if is_deep_research_model_failure_text(answer) {
-        return Some(
-            "content rejected: the response contains a model or tool failure message".to_string(),
-        );
-    }
-    if deep_research_output_has_internal_leak(answer) {
-        return Some(
-            "content rejected: the report contains internal workflow or tool-status text"
-                .to_string(),
+            "content rejected: generated content contains a reserved artifact marker".to_string(),
         );
     }
     let markdown = normalize_report_markdown_candidate(query, answer)?;
@@ -504,10 +412,7 @@ pub fn deep_research_report_rejection_diagnostic_from_answer_text(
 
 fn deep_research_recovery_result_text(answer_text: &str, workflow_output: &str) -> String {
     let answer = answer_text.trim();
-    if visible_char_count(answer) >= 24
-        && !is_deep_research_model_failure_text(answer)
-        && !deep_research_output_has_internal_leak(answer)
-    {
+    if visible_char_count(answer) >= 24 {
         return truncate_recovery_text(&deep_research_sanitize_recovery_text(answer), 20_000);
     }
 
@@ -588,17 +493,6 @@ fn deep_research_recovery_evidence_status(
         if let Some(metadata_note) = metadata_note.as_deref() {
             summary.push(' ');
             summary.push_str(metadata_note);
-        }
-        return summary;
-    }
-    if deep_research_output_has_internal_leak(trimmed) {
-        let mut summary = "The evidence workflow returned internal tool or workflow logs. Those logs were withheld from the user-facing report.".to_string();
-        if let Some(metadata_note) = metadata_note.as_deref() {
-            summary.push(' ');
-            summary.push_str(metadata_note);
-            summary.push_str(" Domain conclusions remain provisional.");
-        } else {
-            summary.push_str(" No source-backed conclusion is presented here.");
         }
         return summary;
     }
