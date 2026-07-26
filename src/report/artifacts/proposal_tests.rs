@@ -123,6 +123,8 @@ fn proposal_prompt_contains_semantic_scope_tracks_and_no_catalog_anchor() {
     assert!(prompt.contains("\"findings\":4"));
     assert!(prompt.contains("\"supported_claims\":5"));
     assert!(prompt.contains("\"cited_sources\":2"));
+    assert!(prompt.contains("\"substantive_characters\":1200"));
+    assert!(prompt.contains("at least 1200 substantive characters"));
     assert!(prompt.contains("\"coverage\""));
     assert!(!prompt.contains("https://docs.rs/nimbus"));
     assert!(
@@ -858,6 +860,12 @@ fn comprehensive_recommendation_fixture(
     DeepResearchReportContext,
     serde_json::Value,
 ) {
+    const SUMMARY: &str = "The closed records establish the present operating boundary, the implementation constraints that shape it, the deployment conditions under which it was observed, and the decision factors required for a bounded assessment. Read together, they support a conditional conclusion tied to the reviewed environment rather than a universal statement about every deployment.";
+    const FINDING_ONE: &str = "The first record locates the operating boundary at the point where validated input becomes a durable terminal state. It preserves the observation's time and population scope, distinguishes entry from successful settlement, and identifies the visible signal by which a reviewer can check that the recorded path completed.";
+    const FINDING_TWO: &str = "The second record separates documented implementation constraints from assumptions that the acquired material never tested. In particular, it treats environmental readiness, dependency availability, and recovery behavior as distinct preconditions, preventing a successful isolated run from being generalized to an unsupported production population.";
+    const FINDING_THREE: &str = "Across both records, deployment is established only when the entry boundary, durable settlement, and required environmental state remain aligned. This comparison explains why the report can describe a bounded operating result while still withholding conclusions about settings whose dependencies or failure paths were not observed.";
+    const FINDING_FOUR: &str = "The combined evidence also distinguishes an observed state from an adoption decision: the records establish what operated, under which constraints, and with which recovery boundary, but they do not supply an unstated ranking of alternatives. Any rollout choice must therefore retain those premises as explicit acceptance conditions.";
+    const RECOMMENDATION: &str = "Use the documented decision boundary to stage adoption. Verify the environmental preconditions before routing production work, confirm durable settlement independently of request acceptance, and retain an explicit rollback condition for every premise not covered by the reviewed evidence; broader rollout should wait for observations from the intended operating population.";
     let observed_coverage = |track_id: &str| DeepResearchSourceCoverage {
         track_id: track_id.to_string(),
         completion_criterion_indexes: vec![0],
@@ -870,7 +878,7 @@ fn comprehensive_recommendation_fixture(
                 alias: "source-1".to_string(),
                 title: "First closed record".to_string(),
                 anchor: "https://source-1.example/research".to_string(),
-                chunks: vec!["First bounded evidence record.".to_string()],
+                chunks: vec![format!("{SUMMARY} {FINDING_ONE} {FINDING_THREE}")],
                 claim_eligible: true,
                 semantically_admitted: true,
                 relevant_track_ids: vec!["observed.state".to_string()],
@@ -880,7 +888,7 @@ fn comprehensive_recommendation_fixture(
                 alias: "source-2".to_string(),
                 title: "Second closed record".to_string(),
                 anchor: "https://source-2.example/research".to_string(),
-                chunks: vec!["Second bounded evidence record.".to_string()],
+                chunks: vec![format!("{FINDING_TWO} {FINDING_THREE} {FINDING_FOUR}")],
                 claim_eligible: true,
                 semantically_admitted: true,
                 relevant_track_ids: vec!["observed.state".to_string()],
@@ -890,7 +898,7 @@ fn comprehensive_recommendation_fixture(
                 alias: "source-3".to_string(),
                 title: "Decision record".to_string(),
                 anchor: "https://source-3.example/research".to_string(),
-                chunks: vec!["Bounded decision evidence record.".to_string()],
+                chunks: vec![RECOMMENDATION.to_string()],
                 claim_eligible: true,
                 semantically_admitted: true,
                 relevant_track_ids: vec!["decision.advice".to_string()],
@@ -934,29 +942,29 @@ fn comprehensive_recommendation_fixture(
     };
     let proposal = report_proposal(serde_json::json!({
         "summary": [{
-            "text": "The closed records establish the current operating boundary, documented implementation constraints, observed deployment conditions, and the decision factors required for a bounded assessment.",
+            "text": SUMMARY,
             "source_aliases": ["source-1"],
             "track_ids": ["observed.state"]
         }],
         "findings": [{
-            "text": "Two independently attributable records identify the operating boundary while preserving its temporal and population scope without extending the conclusion beyond the observed setting.",
+            "text": FINDING_ONE,
             "source_aliases": ["source-1"],
             "track_ids": ["observed.state"]
         }, {
-            "text": "The retained evidence distinguishes documented implementation constraints from assumptions that were not established by the acquired material, keeping the resulting assessment explicitly bounded.",
+            "text": FINDING_TWO,
             "source_aliases": ["source-2"],
             "track_ids": ["observed.state"]
         }, {
-            "text": "Observed deployment conditions are represented as source-backed findings with exact provenance, so the report can explain both what is established and which conclusions remain outside the evidence.",
+            "text": FINDING_THREE,
             "source_aliases": ["source-1", "source-2"],
             "track_ids": ["observed.state"]
         }, {
-            "text": "The evidence supports a substantive comparison of the recorded operating state, implementation boundaries, and adoption conditions without deriving an unstated ranking or universal conclusion.",
+            "text": FINDING_FOUR,
             "source_aliases": ["source-2"],
             "track_ids": ["observed.state"]
         }],
         "recommendations": [{
-            "text": "Use the documented decision boundary to stage adoption, validate the stated constraints in the intended environment, and retain an explicit rollback condition for any premise not covered by the reviewed evidence.",
+            "text": RECOMMENDATION,
             "source_aliases": ["source-3"],
             "track_ids": ["decision.advice"]
         }],

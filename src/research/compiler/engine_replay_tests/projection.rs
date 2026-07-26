@@ -53,6 +53,11 @@ pub(super) fn planner_outline(replay: &FrozenReplay) -> Value {
                 "focus": bounded_text(&dimension.question, 500),
                 "material": dimension.material,
                 "completion_criteria": [bounded_text(&dimension.question, 240)],
+                "questions": [{
+                    "question": bounded_text(&dimension.question, 240),
+                    "role": "establish",
+                    "completion_criterion_indexes": [0],
+                }],
                 "evidence_requirements": {
                     "primary_source_required": roles.iter().any(|role| {
                         matches!(
@@ -207,11 +212,23 @@ pub(super) fn report_proposal(replay: &FrozenReplay) -> Value {
         .claims
         .iter()
         .map(|claim| {
+            let analysis_role = match (claim.placement, claim.kind) {
+                (ClaimPlacement::DirectAnswer, _) => "conclusion",
+                (ClaimPlacement::Finding, ClaimKind::Fact) => "evidence",
+                (ClaimPlacement::Finding, ClaimKind::Inference)
+                    if claim.basis_claim_ids.len() >= 2 =>
+                {
+                    "comparison"
+                }
+                (ClaimPlacement::Finding, ClaimKind::Inference) => "explanation",
+                (ClaimPlacement::Finding, ClaimKind::Recommendation) => "implication",
+            };
             serde_json::json!({
                 "id": claim.id,
                 "dimension_id": claim.dimension_id,
                 "placement": claim.placement,
                 "kind": claim.kind,
+                "analysis_role": analysis_role,
                 "text": claim.text,
                 "evidence_refs": claim
                     .evidence_refs
@@ -245,6 +262,38 @@ pub(super) fn report_proposal(replay: &FrozenReplay) -> Value {
         })
         .collect::<Vec<_>>();
     let labels = &replay.contract.spec.reader_labels;
+    let narrative_sections = replay
+        .contract
+        .spec
+        .dimensions
+        .iter()
+        .map(|dimension| {
+            let paragraphs = replay
+                .proposal
+                .claims
+                .iter()
+                .filter(|claim| {
+                    claim.dimension_id == dimension.id && claim.placement == ClaimPlacement::Finding
+                })
+                .map(|claim| {
+                    let purpose = match claim.kind {
+                        ClaimKind::Fact => "evidence",
+                        ClaimKind::Inference => "synthesis",
+                        ClaimKind::Recommendation => "implication",
+                    };
+                    serde_json::json!({
+                        "purpose": purpose,
+                        "claim_ids": [claim.id],
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "dimension_id": dimension.id,
+                "heading": bounded_text(&dimension.question, 96),
+                "paragraphs": paragraphs,
+            })
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
         "report_language": replay.contract.spec.language,
         "labels": {
@@ -268,6 +317,9 @@ pub(super) fn report_proposal(replay: &FrozenReplay) -> Value {
                 "text": gap.text,
             })
         }).collect::<Vec<_>>(),
+        "narrative": {
+            "sections": narrative_sections,
+        },
     })
 }
 

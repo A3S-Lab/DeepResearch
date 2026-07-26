@@ -32,9 +32,18 @@ pub(super) fn render(context: &RenderContext<'_>) -> String {
             &format!("## {}", escape_inline(&labels.direct_answer)),
         );
         push_line(&mut output, "");
-        for claim in &document.direct_answer_claims {
-            render_claim(&mut output, context, claim);
-        }
+        let paragraph_claim_ids = document
+            .direct_answer_claims
+            .iter()
+            .map(|claim| vec![claim.id.clone()])
+            .collect::<Vec<_>>();
+        render_narrative(
+            &mut output,
+            context,
+            &document.direct_answer_claims,
+            &paragraph_claim_ids,
+        );
+        render_traceability(&mut output, context, &document.direct_answer_claims);
     }
 
     push_line(
@@ -94,21 +103,24 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
         &format!("### {}", escape_inline(&dimension.heading)),
     );
     push_line(output, "");
-    push_line(
-        output,
-        &format!(
-            "**{}:** {}",
-            labels.status,
-            escape_inline(context.coverage_label(dimension.coverage))
-        ),
-    );
-    push_line(output, "");
-    if !dimension.claims.is_empty() {
-        push_line(output, &format!("#### {}", escape_inline(&labels.findings)));
+    if dimension.claims.is_empty() && dimension.relations.is_empty() && dimension.gaps.is_empty() {
+        push_line(
+            output,
+            &format!(
+                "*{}*",
+                escape_inline(context.coverage_label(dimension.coverage))
+            ),
+        );
         push_line(output, "");
-        for claim in &dimension.claims {
-            render_claim(output, context, claim);
-        }
+    }
+    if !dimension.claims.is_empty() {
+        render_narrative(
+            output,
+            context,
+            &dimension.claims,
+            &dimension.paragraph_claim_ids,
+        );
+        render_traceability(output, context, &dimension.claims);
     }
     if !dimension.relations.is_empty() {
         push_line(
@@ -158,53 +170,100 @@ fn render_dimension(output: &mut String, context: &RenderContext<'_>, dimension:
     }
 }
 
-fn render_claim(output: &mut String, context: &RenderContext<'_>, claim: &ReportClaim) {
+fn render_narrative(
+    output: &mut String,
+    context: &RenderContext<'_>,
+    claims: &[ReportClaim],
+    paragraph_claim_ids: &[Vec<String>],
+) {
+    for claims in context.narrative_paragraphs(claims, paragraph_claim_ids) {
+        let mut paragraph = String::new();
+        for (index, claim) in claims.iter().enumerate() {
+            if index > 0 {
+                paragraph.push(' ');
+            }
+            append_claim_sentence(&mut paragraph, context, claim);
+        }
+        push_line(output, &paragraph);
+        push_line(output, "");
+    }
+}
+
+fn append_claim_sentence(output: &mut String, context: &RenderContext<'_>, claim: &ReportClaim) {
     let number = context
         .claim_number(&claim.id)
         .expect("every report claim has a presentation number");
-    push_line(output, &format!("<a id=\"claim-{number}\"></a>"));
-    let prefix = match claim.kind {
-        ClaimKind::Fact => String::new(),
-        ClaimKind::Inference => format!("**{}:** ", context.labels.inference),
-        ClaimKind::Recommendation => format!("**{}:** ", context.labels.recommendation),
-    };
+    output.push_str(&format!("<a id=\"claim-{number}\"></a>"));
+    output.push_str(&escape_inline(&claim.text));
     let citations = claim
         .citation_numbers
         .iter()
         .map(|number| format!("[{number}](#source-{number})"))
         .collect::<Vec<_>>()
         .join(" ");
-    push_line(
-        output,
-        &format!("- {prefix}{} {citations}", escape_inline(&claim.text)),
-    );
-    render_basis(output, context, claim);
-    if let Some(derivation) = &claim.derivation {
-        push_line(
-            output,
-            &format!(
-                "  - *{}: {}*",
-                context.labels.derivation,
-                escape_inline(&derivation.method)
-            ),
-        );
+    if !citations.is_empty() {
+        output.push(' ');
+        output.push_str(&citations);
     }
-    push_line(output, "");
 }
 
-fn render_basis(output: &mut String, context: &RenderContext<'_>, claim: &ReportClaim) {
-    let basis = claim
-        .basis_claim_ids
+fn render_traceability(output: &mut String, context: &RenderContext<'_>, claims: &[ReportClaim]) {
+    let traceable_claims = claims
         .iter()
-        .filter_map(|claim_id| context.claim_number(claim_id))
-        .map(|number| format!("{} [{number}](#claim-{number})", context.labels.finding))
+        .filter(|claim| !claim.basis_claim_ids.is_empty() || claim.derivation.is_some())
         .collect::<Vec<_>>();
-    if !basis.is_empty() {
-        push_line(
-            output,
-            &format!("  - *{}: {}*", context.labels.basis, basis.join(", ")),
-        );
+    if traceable_claims.is_empty() {
+        return;
     }
+    push_line(output, "<details class=\"traceability\">");
+    push_line(
+        output,
+        &format!(
+            "<summary>{}</summary>",
+            escape_inline(&context.labels.basis)
+        ),
+    );
+    push_line(output, "");
+    for claim in traceable_claims {
+        let number = context
+            .claim_number(&claim.id)
+            .expect("every report claim has a presentation number");
+        let label = match claim.kind {
+            ClaimKind::Fact => context.labels.finding.as_str(),
+            ClaimKind::Inference => context.labels.inference.as_str(),
+            ClaimKind::Recommendation => context.labels.recommendation.as_str(),
+        };
+        let mut line = format!("- [{} {number}](#claim-{number})", escape_inline(label));
+        let basis = claim
+            .basis_claim_ids
+            .iter()
+            .filter_map(|claim_id| context.claim_number(claim_id))
+            .map(|basis_number| {
+                format!(
+                    "{} [{basis_number}](#claim-{basis_number})",
+                    escape_inline(&context.labels.finding)
+                )
+            })
+            .collect::<Vec<_>>();
+        if !basis.is_empty() {
+            line.push_str(&format!(
+                " — **{}:** {}",
+                escape_inline(&context.labels.basis),
+                basis.join(", ")
+            ));
+        }
+        if let Some(derivation) = &claim.derivation {
+            line.push_str(&format!(
+                " — **{}:** {}",
+                escape_inline(&context.labels.derivation),
+                escape_inline(&derivation.method)
+            ));
+        }
+        push_line(output, &line);
+    }
+    push_line(output, "");
+    push_line(output, "</details>");
+    push_line(output, "");
 }
 
 fn render_relation(output: &mut String, context: &RenderContext<'_>, relation: &ReportRelation) {
@@ -218,7 +277,7 @@ fn render_relation(output: &mut String, context: &RenderContext<'_>, relation: &
         push_line(
             output,
             &format!(
-                "- **{}:** {} {} / {} {}.",
+                "**{}:** {} {} / {} {}.",
                 context.labels.contradiction,
                 context.labels.finding,
                 references[0],

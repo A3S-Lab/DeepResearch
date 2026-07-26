@@ -13,6 +13,8 @@ pub(super) struct ReportComposition {
 pub(super) fn compose_report_fragment(
     fragment: &str,
     section_plan: &[ReportSectionTreatment],
+    contents_label: &str,
+    reading_path_label: &str,
 ) -> ReportComposition {
     let Some(first_heading) = fragment.find("<h2>") else {
         return ReportComposition {
@@ -31,7 +33,10 @@ pub(super) fn compose_report_fragment(
         ));
     }
 
-    let mut toc = String::from("<nav class=\"toc\" aria-label=\"Report contents\">");
+    let escaped_contents_label = escape_attribute(contents_label);
+    let mut toc = format!(
+        "<nav class=\"report-nav\" aria-label=\"{escaped_contents_label}\"><div class=\"report-nav__context\" aria-hidden=\"true\"><span>{escaped_contents_label}</span></div><div class=\"report-nav__track\">"
+    );
 
     let mut remaining = &fragment[first_heading..];
     let mut section_count = 0usize;
@@ -67,7 +72,7 @@ pub(super) fn compose_report_fragment(
         finding_count = finding_count.saturating_add(section_findings);
 
         toc.push_str(&format!(
-            "<a href=\"#{section_id}\"><span>{section_count:02}</span>{}</a>",
+            "<a href=\"#{section_id}\"><span class=\"report-nav__index\">{section_count:02}</span><span class=\"report-nav__text\">{}</span></a>",
             escape_attribute(&heading_text)
         ));
         if section_count <= 4 {
@@ -87,13 +92,13 @@ pub(super) fn compose_report_fragment(
             break;
         }
     }
-    toc.push_str("</nav>");
+    toc.push_str("</div></nav>");
     let hero_guide = if hero_links.is_empty() {
         String::new()
     } else {
-        let label = "Reading path";
         format!(
-            "<aside class=\"hero-map\" aria-label=\"{label}\"><p class=\"profile-label\">{label}</p><ol>{hero_links}</ol></aside>"
+            "<aside class=\"hero-map\" aria-label=\"{label}\"><p class=\"profile-label\">{label}</p><ol>{hero_links}</ol></aside>",
+            label = escape_attribute(reading_path_label),
         )
     };
 
@@ -265,7 +270,7 @@ mod tests {
     #[test]
     fn report_sections_default_to_neutral_composition_without_heading_classification() {
         let fragment = "<h2>Executive Summary</h2><ul><li>One</li><li>Two</li></ul><h2>Key Findings</h2><h3>First</h3><p>Detail.</p><h3>Second</h3><p>Detail.</p><h2>Evidence Matrix</h2><table><tr><td>A</td></tr></table><h2>Sources</h2><ul><li>Source</li></ul>";
-        let composition = compose_report_fragment(fragment, &[]);
+        let composition = compose_report_fragment(fragment, &[], "Report contents", "Reading path");
 
         assert_eq!(composition.finding_count, 0);
         assert_eq!(composition.body.matches("section--narrative").count(), 4);
@@ -291,7 +296,8 @@ mod tests {
             },
         ];
 
-        let composition = compose_report_fragment(fragment, &plan);
+        let composition =
+            compose_report_fragment(fragment, &plan, "Report contents", "Reading path");
 
         assert!(composition
             .body

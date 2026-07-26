@@ -6,6 +6,7 @@
 //! presentation capabilities without adding topic-specific routing.
 
 pub mod engine;
+mod language;
 pub mod planner;
 pub mod report;
 pub mod research;

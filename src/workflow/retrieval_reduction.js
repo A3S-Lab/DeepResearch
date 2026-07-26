@@ -1,11 +1,10 @@
   const reducedSelectorPacket = (
     packet,
-    shards,
+    shardEntries,
     outputs,
-    failures,
-    shardStepPrefix
+    failures
   ) => {
-    if (!packet || shards.length === 0) {
+    if (!packet || shardEntries.length === 0) {
       return {
         packet: null,
         candidate_count: 0,
@@ -17,8 +16,10 @@
     const sourceRelevance = [];
     const shardErrors = [];
     let failedShardCount = 0;
-    for (let index = 0; index < shards.length; index += 1) {
-      const stepId = `${shardStepPrefix || STEP_SELECT_SHARD_PREFIX}${index + 1}`;
+    for (let index = 0; index < shardEntries.length; index += 1) {
+      const entry = shardEntries[index];
+      const shard = entry.packet;
+      const stepId = entry.step_id;
       if (failures[stepId]) {
         failedShardCount += 1;
         shardErrors.push(
@@ -35,7 +36,8 @@
         );
         continue;
       }
-      if (selection.chunk_ids.length > MAX_SELECTOR_SHARD_CANDIDATES) {
+      const shardCandidateLimit = selectorShardCandidateLimit(shard);
+      if (selection.chunk_ids.length > shardCandidateLimit) {
         failedShardCount += 1;
         shardErrors.push(
           `Semantic evidence shard ${index + 1} exceeded its closed candidate limit.`
@@ -43,11 +45,17 @@
         continue;
       }
       const allowedIds = new Set(
-        shards[index].sources.flatMap((source) =>
+        shard.sources.flatMap((source) =>
           source.chunks.map((chunk) => chunk.chunk_id)
         )
       );
+      const sourceByChunkId = new Map(
+        shard.sources.flatMap((source) =>
+          source.chunks.map((chunk) => [chunk.chunk_id, source.source_id])
+        )
+      );
       const localIds = new Set();
+      const selectedBySource = new Map();
       let invalidChunkCatalog = false;
       for (const chunkId of selection.chunk_ids) {
         if (
@@ -59,6 +67,14 @@
           break;
         }
         localIds.add(chunkId);
+        const sourceId = sourceByChunkId.get(chunkId);
+        const sourceSelectionCount =
+          (selectedBySource.get(sourceId) || 0) + 1;
+        if (sourceSelectionCount > MAX_SELECTOR_SHARD_CANDIDATES) {
+          invalidChunkCatalog = true;
+          break;
+        }
+        selectedBySource.set(sourceId, sourceSelectionCount);
       }
       if (invalidChunkCatalog) {
         failedShardCount += 1;
@@ -68,7 +84,7 @@
         continue;
       }
       const shardCoverage = validatedSourceCoverage(
-        shards[index],
+        shard,
         selection,
         localIds
       );
@@ -80,7 +96,7 @@
         continue;
       }
       const shardRelevance = validatedSourceRelevance(
-        shards[index],
+        shard,
         selection,
         localIds
       );

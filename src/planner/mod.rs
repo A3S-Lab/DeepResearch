@@ -10,6 +10,12 @@ use crate::research::{
 };
 
 const MAX_PLANNER_TRACK_EFFECTS: u64 = 4;
+const MAX_PLANNER_QUESTIONS_PER_TRACK: usize = 4;
+const MAX_PLANNER_COMPLETION_CRITERIA: usize = 3;
+const MAX_PLANNER_SUPPLEMENTAL_QUERIES: usize = 7;
+const MAX_PLANNER_SEARCHES: u64 = 8;
+const MAX_PLANNER_INITIAL_FETCHES: u64 = 12;
+const MAX_PLANNER_SUPPLEMENTAL_FETCHES: u64 = 4;
 const PLANNER_OUTLINE_ATTEMPT_TIMEOUT_MS: u64 = 90_000;
 
 #[derive(Clone, Debug)]
@@ -18,7 +24,7 @@ pub struct PlannedInquiry {
 }
 
 mod contract;
-pub use contract::deep_research_loop_contract;
+pub use contract::{deep_research_loop_contract, deep_research_loop_contract_for_language};
 
 include!("planning.rs");
 include!("bounding.rs");

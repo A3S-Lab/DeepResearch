@@ -81,6 +81,7 @@ fn fact(id: &str, dimension_id: &str, source_id: &str, chunk_id: &str) -> ClaimP
         dimension_id: dimension_id.to_string(),
         placement: ClaimPlacement::Finding,
         kind: ClaimKind::Fact,
+        analysis_role: None,
         text: format!("Admitted factual claim {id}."),
         evidence_refs: vec![ClaimEvidenceRef {
             source_id: source_id.to_string(),
@@ -97,6 +98,7 @@ fn recommendation(id: &str, basis_claim_ids: &[&str]) -> ClaimProposal {
         dimension_id: "decision".to_string(),
         placement: ClaimPlacement::Finding,
         kind: ClaimKind::Recommendation,
+        analysis_role: None,
         text: "Prefer the bounded option while the observed constraint remains.".to_string(),
         evidence_refs: vec![],
         basis_claim_ids: basis_claim_ids.iter().map(|id| (*id).to_string()).collect(),
@@ -109,6 +111,7 @@ fn proposal(claims: Vec<ClaimProposal>) -> ClaimLedgerProposal {
         claims,
         relations: vec![],
         gaps: vec![],
+        narrative: None,
     }
 }
 
@@ -280,6 +283,7 @@ fn contradiction_relation_preserves_both_independent_facts() {
             claim_ids: ["record-a".to_string(), "record-b".to_string()],
         }],
         gaps: vec![],
+        narrative: None,
     };
 
     let ledger = admit_claim_ledger(&contract, &catalog, proposal).expect("contradiction");
@@ -307,6 +311,7 @@ fn invalid_contradiction_relation_does_not_remove_factual_siblings() {
             claim_ids: ["record-a".to_string(), "missing-record".to_string()],
         }],
         gaps: vec![],
+        narrative: None,
     };
 
     let ledger = admit_claim_ledger(&contract, &catalog, proposal).expect("sibling salvage");
@@ -328,6 +333,7 @@ fn derived_claim_requires_admitted_inputs_and_keeps_its_method() {
         dimension_id: "decision".to_string(),
         placement: ClaimPlacement::Finding,
         kind: ClaimKind::Inference,
+        analysis_role: None,
         text: "The recorded value decreased by 20 percent.".to_string(),
         evidence_refs: vec![],
         basis_claim_ids: vec!["observed-value".to_string()],
@@ -371,6 +377,7 @@ fn cyclic_inferences_are_rejected_without_erasing_a_valid_fact() {
         dimension_id: "decision".to_string(),
         placement: ClaimPlacement::Finding,
         kind: ClaimKind::Inference,
+        analysis_role: None,
         text: format!("Inference {id}."),
         evidence_refs: vec![],
         basis_claim_ids: vec![basis.to_string()],
@@ -421,6 +428,7 @@ fn a_gap_must_reference_real_queries_and_dimension_targets() {
         )],
         relations: vec![],
         gaps: vec![invalid_gap],
+        narrative: None,
     };
 
     let ledger = admit_claim_ledger(&contract, &catalog, proposal).expect("gap salvage");
@@ -502,6 +510,7 @@ fn a_gap_query_must_have_attempted_each_reported_missing_target() {
             claims: vec![],
             relations: vec![],
             gaps: vec![proposed_gap],
+            narrative: None,
         },
     )
     .expect("gap admission");
@@ -594,6 +603,7 @@ fn a_recommendation_cannot_use_basis_evidence_outside_its_dimension_targets() {
         dimension_id: "beta-decision".to_string(),
         placement: ClaimPlacement::DirectAnswer,
         kind: ClaimKind::Recommendation,
+        analysis_role: None,
         text: "Choose the Beta option.".to_string(),
         evidence_refs: vec![],
         basis_claim_ids: vec!["alpha-fact".to_string()],

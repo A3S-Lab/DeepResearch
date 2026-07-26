@@ -20,6 +20,18 @@ pub(super) enum ClaimKind {
     Recommendation,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ClaimAnalysisRole {
+    Conclusion,
+    Evidence,
+    Comparison,
+    Explanation,
+    Challenge,
+    Implication,
+    Boundary,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ClaimEvidenceRef {
@@ -41,6 +53,8 @@ pub(super) struct ClaimProposal {
     pub(super) dimension_id: String,
     pub(super) placement: ClaimPlacement,
     pub(super) kind: ClaimKind,
+    #[serde(default)]
+    pub(super) analysis_role: Option<ClaimAnalysisRole>,
     pub(super) text: String,
     pub(super) evidence_refs: Vec<ClaimEvidenceRef>,
     pub(super) basis_claim_ids: Vec<String>,
@@ -74,10 +88,31 @@ pub(super) struct GapProposal {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct NarrativeParagraphProposal {
+    pub(super) claim_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NarrativeSectionProposal {
+    pub(super) dimension_id: String,
+    pub(super) heading: String,
+    pub(super) paragraphs: Vec<NarrativeParagraphProposal>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NarrativePlanProposal {
+    pub(super) sections: Vec<NarrativeSectionProposal>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ClaimLedgerProposal {
     pub(super) claims: Vec<ClaimProposal>,
     pub(super) relations: Vec<ClaimRelationProposal>,
     pub(super) gaps: Vec<GapProposal>,
+    pub(super) narrative: Option<NarrativePlanProposal>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,6 +121,7 @@ pub(super) struct AdmittedClaim {
     pub(super) dimension_id: String,
     pub(super) placement: ClaimPlacement,
     pub(super) kind: ClaimKind,
+    pub(super) analysis_role: Option<ClaimAnalysisRole>,
     pub(super) text: String,
     pub(super) evidence_refs: Vec<ClaimEvidenceRef>,
     pub(super) basis_claim_ids: Vec<String>,
@@ -99,6 +135,7 @@ impl From<ClaimProposal> for AdmittedClaim {
             dimension_id: claim.dimension_id,
             placement: claim.placement,
             kind: claim.kind,
+            analysis_role: claim.analysis_role,
             text: claim.text,
             evidence_refs: claim.evidence_refs,
             basis_claim_ids: claim.basis_claim_ids,
@@ -132,6 +169,13 @@ pub(super) struct AdmittedGap {
     pub(super) origin: GapOrigin,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AdmittedNarrativeSection {
+    pub(super) dimension_id: String,
+    pub(super) heading: String,
+    pub(super) paragraph_claim_ids: Vec<Vec<String>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RejectionReason {
     InvalidIdentity,
@@ -159,6 +203,7 @@ pub(super) struct AdmittedClaimLedger {
     pub(super) claims: Vec<AdmittedClaim>,
     pub(super) relations: Vec<AdmittedClaimRelation>,
     pub(super) gaps: Vec<AdmittedGap>,
+    pub(super) narrative_sections: Vec<AdmittedNarrativeSection>,
     pub(super) rejections: Vec<LedgerRejection>,
 }
 

@@ -1,7 +1,10 @@
 const COMPREHENSIVE_REPORT_MIN_FINDINGS: usize = 4;
 const COMPREHENSIVE_REPORT_MIN_CLAIMS: usize = 5;
 const COMPREHENSIVE_REPORT_MIN_CITED_SOURCES: usize = 2;
-const COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS: usize = 480;
+const COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS: usize = 1_200;
+const TYPED_COMPREHENSIVE_REPORT_MIN_FINDINGS: usize = 5;
+const TYPED_COMPREHENSIVE_REPORT_MIN_CLAIMS: usize = 6;
+const TYPED_COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS: usize = 1_200;
 
 #[derive(
     Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize,
@@ -100,6 +103,14 @@ pub fn deep_research_report_context_from_plan(
                     })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let questions = object
+            .get("questions")
+            .and_then(serde_json::Value::as_array)
+            .filter(|questions| !questions.is_empty())
+            .ok_or_else(|| {
+                "DeepResearch report plan track omitted its research questions".to_string()
+            })?
+            .clone();
         let evidence_requirements = object
             .get("evidence_requirements")
             .and_then(serde_json::Value::as_object)
@@ -130,6 +141,7 @@ pub fn deep_research_report_context_from_plan(
                 .ok_or_else(|| {
                     "DeepResearch report plan track omitted boolean `material`".to_string()
                 })?,
+            "questions": questions,
             "completion_criteria": criteria,
             "evidence_requirements": {
                 "primary_source_required": primary_source_required,
@@ -156,6 +168,11 @@ fn focused_report_context() -> DeepResearchReportContext {
             "title": "Requested answer",
             "focus": "Answer the user's request from the closed evidence.",
             "material": true,
+            "questions": [{
+                "question": "What conclusion is directly supported by the closed evidence?",
+                "role": "establish",
+                "completion_criterion_indexes": [0],
+            }],
             "completion_criteria": ["The requested answer is directly supported."],
             "evidence_requirements": {
                 "primary_source_required": false,
@@ -193,6 +210,19 @@ fn deep_research_report_depth_requirements(
             minimum_substantive_characters: 0,
         },
     }
+}
+
+fn deep_research_typed_report_depth_requirements(
+    scope: DeepResearchReportScope,
+) -> DeepResearchReportDepthRequirements {
+    let mut requirements = deep_research_report_depth_requirements(scope);
+    if scope == DeepResearchReportScope::Comprehensive {
+        requirements.minimum_findings = TYPED_COMPREHENSIVE_REPORT_MIN_FINDINGS;
+        requirements.minimum_claims = TYPED_COMPREHENSIVE_REPORT_MIN_CLAIMS;
+        requirements.minimum_substantive_characters =
+            TYPED_COMPREHENSIVE_REPORT_MIN_SUBSTANTIVE_CHARACTERS;
+    }
+    requirements
 }
 
 fn report_substantive_character_count(text: &str) -> usize {

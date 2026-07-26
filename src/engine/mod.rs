@@ -1,6 +1,7 @@
 //! Domain-agnostic orchestration over injected research runtime ports.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -8,7 +9,16 @@ use crate::report::{
     AdmittedDeepResearchReport, DeepResearchPublicationQuality, ResearchReportArtifacts,
 };
 
+mod cancellation;
+mod contract;
+mod event;
 mod execution;
+
+pub use cancellation::DeepResearchCancellation;
+pub use contract::{
+    DeepResearchRequest, DeepResearchRequestLimits, EvidenceScope, WorkspaceSourceHint,
+};
+pub use event::{DeepResearchEvent, DeepResearchLifecycle, PublicationOutcome};
 
 /// Default execution limits for one progressively publishable research run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,14 +36,14 @@ pub struct EngineLimits {
 impl Default for EngineLimits {
     fn default() -> Self {
         const GENERATION_GRACE_MS: u64 = 15_000;
-        const REPORT_ATTEMPT_MS: u64 = 90_000;
+        const REPORT_ATTEMPT_MS: u64 = 240_000;
         const REPORT_ATTEMPTS: u8 = 2;
 
         Self {
             planner_attempt_timeout_ms: 90_000,
-            planner_max_attempts: 1,
+            planner_max_attempts: 2,
             bootstrap_stage_timeout_ms: 150_000,
-            planned_retrieval_stage_timeout_ms: 300_000,
+            planned_retrieval_stage_timeout_ms: 600_000,
             report_attempt_timeout_ms: REPORT_ATTEMPT_MS,
             report_stage_timeout_ms: REPORT_ATTEMPT_MS * u64::from(REPORT_ATTEMPTS)
                 + GENERATION_GRACE_MS,
@@ -72,6 +82,7 @@ impl EngineLimits {
 pub enum GenerationStage {
     Planning,
     Report,
+    Editorial,
 }
 
 impl GenerationStage {
@@ -79,6 +90,7 @@ impl GenerationStage {
         match self {
             Self::Planning => "planner-outline",
             Self::Report => "report-proposal",
+            Self::Editorial => "report-editorial",
         }
     }
 }
@@ -98,7 +110,8 @@ impl WorkflowStage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResearchStage {
     Planning,
     BootstrapRetrieval,
@@ -108,7 +121,8 @@ pub enum ResearchStage {
     FinalPublication,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResearchProgress {
     Started(ResearchStage),
     Completed(ResearchStage),
@@ -144,6 +158,7 @@ pub enum PublicationRequest {
     SourceBacked {
         run_id: String,
         query: String,
+        output_language: String,
         workflow_output: String,
         workflow_metadata: Option<Value>,
         quality: DeepResearchPublicationQuality,
@@ -151,6 +166,7 @@ pub enum PublicationRequest {
     Synthesized {
         run_id: String,
         query: String,
+        output_language: String,
         report: AdmittedDeepResearchReport,
         publication: crate::report::DeepResearchEvidenceFirstPublication,
         quality: DeepResearchPublicationQuality,
@@ -158,6 +174,7 @@ pub enum PublicationRequest {
     NoEvidence {
         run_id: String,
         query: String,
+        output_language: String,
         quality: DeepResearchPublicationQuality,
     },
 }
@@ -181,6 +198,13 @@ pub trait PublicationPort: Send + Sync {
 #[async_trait]
 pub trait ProgressPort: Send + Sync {
     async fn report_progress(&self, progress: ResearchProgress) -> Result<(), String>;
+
+    async fn report_event(&self, event: DeepResearchEvent) -> Result<(), String> {
+        match event.legacy_progress() {
+            Some(progress) => self.report_progress(progress).await,
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -206,6 +230,8 @@ pub enum DeepResearchEngineError {
     Publication(String),
     #[error("DeepResearch progress reporting failed: {0}")]
     Progress(String),
+    #[error("DeepResearch run was cancelled")]
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -213,9 +239,27 @@ pub struct DeepResearchRun {
     pub output: Value,
     pub artifacts: ResearchReportArtifacts,
     pub publication: crate::report::DeepResearchEvidenceFirstPublication,
+    pub quality: DeepResearchPublicationQuality,
 }
 
 impl DeepResearchRun {
+    pub fn output_json(&self) -> String {
+        self.output.to_string()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeepResearchResult {
+    pub run_id: String,
+    pub query: String,
+    pub lifecycle: DeepResearchLifecycle,
+    pub publication: PublicationOutcome,
+    pub quality: DeepResearchPublicationQuality,
+    pub artifacts: ResearchReportArtifacts,
+    pub output: Value,
+}
+
+impl DeepResearchResult {
     pub fn output_json(&self) -> String {
         self.output.to_string()
     }
@@ -251,11 +295,20 @@ impl<'a> DeepResearchEngine<'a> {
         self
     }
 
-    async fn progress(&self, progress: ResearchProgress) -> Result<(), DeepResearchEngineError> {
+    async fn event(&self, event: DeepResearchEvent) -> Result<(), DeepResearchEngineError> {
         self.progress
-            .report_progress(progress)
+            .report_event(event)
             .await
             .map_err(DeepResearchEngineError::Progress)
+    }
+
+    async fn progress(
+        &self,
+        run_id: &str,
+        progress: ResearchProgress,
+    ) -> Result<(), DeepResearchEngineError> {
+        self.event(DeepResearchEvent::from_progress(run_id, progress))
+            .await
     }
 }
 

@@ -1,4 +1,4 @@
-const PUBLICATION_RECEIPT_SCHEMA_VERSION: u32 = 2;
+const PUBLICATION_RECEIPT_SCHEMA_VERSION: u32 = 5;
 const MINIMUM_PUBLICATION_RECEIPT_SCHEMA_VERSION: u32 = 1;
 const PUBLICATION_RECEIPT_FILE_NAME: &str = "publication-receipt.json";
 
@@ -8,6 +8,8 @@ struct DeepResearchPublicationReceipt {
     schema_version: u32,
     run_identity_sha256: String,
     query_sha256: String,
+    #[serde(default)]
+    output_language: Option<String>,
     publication: DeepResearchEvidenceFirstPublication,
     quality: DeepResearchPublicationQualityReceipt,
     markdown_sha256: String,
@@ -28,6 +30,14 @@ struct DeepResearchPublicationQualityReceipt {
     #[serde(default)]
     accepted_basis_edge_count: usize,
     #[serde(default)]
+    analytical_claim_count: usize,
+    #[serde(default)]
+    cross_source_synthesis_count: usize,
+    #[serde(default)]
+    resolved_material_dimension_count: usize,
+    #[serde(default)]
+    deeply_analyzed_dimension_count: usize,
+    #[serde(default)]
     accepted_gap_count: usize,
     cited_source_count: usize,
     substantive_character_count: usize,
@@ -45,6 +55,10 @@ impl From<DeepResearchPublicationQuality> for DeepResearchPublicationQualityRece
             accepted_relation_count: quality.accepted_relation_count,
             accepted_derivation_count: quality.accepted_derivation_count,
             accepted_basis_edge_count: quality.accepted_basis_edge_count,
+            analytical_claim_count: quality.analytical_claim_count,
+            cross_source_synthesis_count: quality.cross_source_synthesis_count,
+            resolved_material_dimension_count: quality.resolved_material_dimension_count,
+            deeply_analyzed_dimension_count: quality.deeply_analyzed_dimension_count,
             accepted_gap_count: quality.accepted_gap_count,
             cited_source_count: quality.cited_source_count,
             substantive_character_count: quality.substantive_character_count,
@@ -64,6 +78,10 @@ impl From<DeepResearchPublicationQualityReceipt> for DeepResearchPublicationQual
             accepted_relation_count: quality.accepted_relation_count,
             accepted_derivation_count: quality.accepted_derivation_count,
             accepted_basis_edge_count: quality.accepted_basis_edge_count,
+            analytical_claim_count: quality.analytical_claim_count,
+            cross_source_synthesis_count: quality.cross_source_synthesis_count,
+            resolved_material_dimension_count: quality.resolved_material_dimension_count,
+            deeply_analyzed_dimension_count: quality.deeply_analyzed_dimension_count,
             accepted_gap_count: quality.accepted_gap_count,
             cited_source_count: quality.cited_source_count,
             substantive_character_count: quality.substantive_character_count,
@@ -75,9 +93,9 @@ impl From<DeepResearchPublicationQualityReceipt> for DeepResearchPublicationQual
 
 /// Persist the exact run authority for an already validated report generation.
 ///
-/// The receipt stores only closed publication metadata and full artifact
-/// digests. Reader prose, source vocabulary, domains, languages, and titles
-/// never participate in restart recovery.
+/// The receipt stores only closed publication metadata, the request-owned
+/// language, and full artifact digests. Reader prose, source vocabulary,
+/// domains, and titles never participate in restart recovery.
 pub fn record_deep_research_publication_receipt(
     workspace: &Path,
     query: &str,
@@ -86,15 +104,42 @@ pub fn record_deep_research_publication_receipt(
     quality: DeepResearchPublicationQuality,
     artifacts: &ResearchReportArtifacts,
 ) -> Result<(), String> {
+    let output_language = crate::language::infer_deep_research_output_language(query);
+    record_deep_research_publication_receipt_in_language(
+        workspace,
+        query,
+        &output_language,
+        run_identity,
+        publication,
+        quality,
+        artifacts,
+    )
+}
+
+/// Persist a validated publication and bind it to the request-owned language.
+pub fn record_deep_research_publication_receipt_in_language(
+    workspace: &Path,
+    query: &str,
+    output_language: &str,
+    run_identity: &str,
+    publication: DeepResearchEvidenceFirstPublication,
+    quality: DeepResearchPublicationQuality,
+    artifacts: &ResearchReportArtifacts,
+) -> Result<(), String> {
     if run_identity.is_empty() {
         return Err("publication receipt requires a non-empty run identity".to_string());
     }
+    crate::language::validate_deep_research_output_language(output_language)?;
     validate_deep_research_publication_quality(publication, quality)?;
-    let trusted = exact_publication_artifacts(workspace, query, publication)?
-        .ok_or_else(|| "publication receipt artifacts failed validation".to_string())?;
-    if &trusted != artifacts {
-        return Err("publication receipt artifacts do not match the query path".to_string());
-    }
+    let run_scoped = exact_run_publication_artifacts(workspace, run_identity, publication)?;
+    let legacy = exact_publication_artifacts(workspace, query, publication)?;
+    let trusted = run_scoped
+        .into_iter()
+        .chain(legacy)
+        .find(|candidate| candidate == artifacts)
+        .ok_or_else(|| {
+            "publication receipt artifacts do not match the run or legacy query path".to_string()
+        })?;
     let markdown = std::fs::read(&trusted.markdown)
         .map_err(|error| format!("read publication Markdown for receipt: {error}"))?;
     let html = std::fs::read(&trusted.html)
@@ -103,6 +148,7 @@ pub fn record_deep_research_publication_receipt(
         schema_version: PUBLICATION_RECEIPT_SCHEMA_VERSION,
         run_identity_sha256: sha256_text(run_identity),
         query_sha256: sha256_text(query),
+        output_language: Some(output_language.to_string()),
         publication,
         quality: quality.into(),
         markdown_sha256: sha256_bytes(&markdown),
@@ -125,18 +171,64 @@ pub fn recover_deep_research_publication_receipt(
     query: &str,
     run_identity: &str,
 ) -> Result<Option<DeepResearchPublishedReport>, String> {
+    let output_language = crate::language::infer_deep_research_output_language(query);
+    recover_deep_research_publication_receipt_with_language(
+        workspace,
+        query,
+        &output_language,
+        run_identity,
+        true,
+    )
+}
+
+/// Recover a completed publication only for the request-owned output language.
+pub fn recover_deep_research_publication_receipt_in_language(
+    workspace: &Path,
+    query: &str,
+    output_language: &str,
+    run_identity: &str,
+) -> Result<Option<DeepResearchPublishedReport>, String> {
+    recover_deep_research_publication_receipt_with_language(
+        workspace,
+        query,
+        output_language,
+        run_identity,
+        false,
+    )
+}
+
+fn recover_deep_research_publication_receipt_with_language(
+    workspace: &Path,
+    query: &str,
+    output_language: &str,
+    run_identity: &str,
+    accept_legacy_without_language: bool,
+) -> Result<Option<DeepResearchPublishedReport>, String> {
     if run_identity.is_empty() {
         return Ok(None);
     }
-    let slug = deep_research_report_slug(query);
-    let receipt_path = workspace
+    crate::language::validate_deep_research_output_language(output_language)?;
+    let run_receipt_path = deep_research_run_artifact_relative_directory(run_identity)
+        .ok()
+        .map(|directory| workspace.join(directory).join(PUBLICATION_RECEIPT_FILE_NAME));
+    let legacy_receipt_path = workspace
         .join(".a3s")
         .join("research")
-        .join(slug)
+        .join(deep_research_report_slug(query))
         .join(PUBLICATION_RECEIPT_FILE_NAME);
-    let receipt_bytes = match read_bounded_plain_file(&receipt_path, 64 * 1024)? {
-        Some(bytes) => bytes,
-        None => return Ok(None),
+    let (receipt_bytes, run_scoped) = if let Some(receipt_path) = run_receipt_path {
+        match read_bounded_plain_file(&receipt_path, 64 * 1024)? {
+            Some(bytes) => (bytes, true),
+            None => match read_bounded_plain_file(&legacy_receipt_path, 64 * 1024)? {
+                Some(bytes) => (bytes, false),
+                None => return Ok(None),
+            },
+        }
+    } else {
+        match read_bounded_plain_file(&legacy_receipt_path, 64 * 1024)? {
+            Some(bytes) => (bytes, false),
+            None => return Ok(None),
+        }
     };
     let receipt: DeepResearchPublicationReceipt = serde_json::from_slice(&receipt_bytes)
         .map_err(|error| format!("decode publication receipt: {error}"))?;
@@ -144,6 +236,25 @@ pub fn recover_deep_research_publication_receipt(
         .contains(&receipt.schema_version)
     {
         return Err("publication receipt has an unsupported schema version".to_string());
+    }
+    match (receipt.schema_version, receipt.output_language.as_deref()) {
+        (PUBLICATION_RECEIPT_SCHEMA_VERSION, Some(receipt_language)) => {
+            crate::language::validate_deep_research_output_language(receipt_language)
+                .map_err(|_| "publication receipt has an invalid output language".to_string())?;
+            if !crate::language::output_language_matches(output_language, receipt_language) {
+                return Ok(None);
+            }
+        }
+        (PUBLICATION_RECEIPT_SCHEMA_VERSION, None) => {
+            return Err("publication receipt omitted its output language".to_string());
+        }
+        (_, None) if accept_legacy_without_language => {}
+        (_, None) => return Ok(None),
+        (_, Some(_)) => {
+            return Err(
+                "legacy publication receipt unexpectedly contains an output language".to_string(),
+            );
+        }
     }
     if receipt.run_identity_sha256 != sha256_text(run_identity)
         || receipt.query_sha256 != sha256_text(query)
@@ -153,7 +264,12 @@ pub fn recover_deep_research_publication_receipt(
     let publication = receipt.publication;
     let quality = DeepResearchPublicationQuality::from(receipt.quality);
     validate_deep_research_publication_quality(publication, quality)?;
-    let Some(artifacts) = exact_publication_artifacts(workspace, query, publication)? else {
+    let artifacts = if run_scoped {
+        exact_run_publication_artifacts(workspace, run_identity, publication)?
+    } else {
+        exact_publication_artifacts(workspace, query, publication)?
+    };
+    let Some(artifacts) = artifacts else {
         return Ok(None);
     };
     let markdown = std::fs::read(&artifacts.markdown)
@@ -188,9 +304,49 @@ pub fn resolve_deep_research_run_publication(
 ) -> Result<Option<DeepResearchPublishedReport>, String> {
     let receipt = recover_deep_research_publication_receipt(workspace, query, run_identity)?;
     let envelope = deep_research_evidence_first_published_report(workspace, query, workflow_output);
+    reconcile_deep_research_publication_authorities(receipt, envelope)
+}
 
+/// Resolve a run publication only when every durable authority agrees on the
+/// request-owned output language.
+pub fn resolve_deep_research_run_publication_in_language(
+    workspace: &Path,
+    query: &str,
+    output_language: &str,
+    run_identity: &str,
+    workflow_output: &str,
+) -> Result<Option<DeepResearchPublishedReport>, String> {
+    let receipt = recover_deep_research_publication_receipt_in_language(
+        workspace,
+        query,
+        output_language,
+        run_identity,
+    )?;
+    let envelope = deep_research_evidence_first_published_report_in_language(
+        workspace,
+        query,
+        workflow_output,
+        output_language,
+    );
+    reconcile_deep_research_publication_authorities(receipt, envelope)
+}
+
+fn reconcile_deep_research_publication_authorities(
+    receipt: Option<DeepResearchPublishedReport>,
+    envelope: Result<Option<DeepResearchPublishedReport>, String>,
+) -> Result<Option<DeepResearchPublishedReport>, String> {
     match receipt {
         Some(receipt) => {
+            let run_scoped = receipt
+                .artifacts
+                .html
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                == Some(std::ffi::OsStr::new("artifacts"));
+            if run_scoped {
+                return Ok(Some(receipt));
+            }
             if let Ok(Some(envelope)) = envelope {
                 if envelope != receipt {
                     return Err(
@@ -211,7 +367,28 @@ fn exact_publication_artifacts(
 ) -> Result<Option<ResearchReportArtifacts>, String> {
     let slug = deep_research_report_slug(query);
     let expected = format!(".a3s/research/{slug}/index.html");
-    let Some(artifacts) = trusted_research_report_artifact_paths(&expected, workspace) else {
+    exact_publication_artifacts_at(workspace, &expected, publication)
+}
+
+fn exact_run_publication_artifacts(
+    workspace: &Path,
+    run_identity: &str,
+    publication: DeepResearchEvidenceFirstPublication,
+) -> Result<Option<ResearchReportArtifacts>, String> {
+    let relative = match deep_research_run_artifact_relative_directory(run_identity) {
+        Ok(relative) => relative,
+        Err(_) => return Ok(None),
+    };
+    let expected = relative.join("index.html").to_string_lossy().replace('\\', "/");
+    exact_publication_artifacts_at(workspace, &expected, publication)
+}
+
+fn exact_publication_artifacts_at(
+    workspace: &Path,
+    expected: &str,
+    publication: DeepResearchEvidenceFirstPublication,
+) -> Result<Option<ResearchReportArtifacts>, String> {
+    let Some(artifacts) = trusted_research_report_artifact_paths(expected, workspace) else {
         return Ok(None);
     };
     let valid = match publication {

@@ -1,7 +1,8 @@
 use a3s_deep_research::{
     engine::{
-        DeepResearchEngine, EngineLimits, ProgressPort, PublicationPort, StructuredGenerationPort,
-        WorkflowExecutionPort,
+        DeepResearchCancellation, DeepResearchEngine, DeepResearchRequest, EngineLimits,
+        EvidenceScope, ProgressPort, PublicationPort, StructuredGenerationPort,
+        WorkflowExecutionPort, WorkspaceSourceHint,
     },
     planner::deep_research_loop_contract,
 };
@@ -37,6 +38,29 @@ async fn readme_integration_compiles(
         .await?;
 
     let _ = run.artifacts.html.display();
+    Ok(())
+}
+
+#[allow(dead_code)]
+async fn typed_engine_integration_compiles(
+    generation: &dyn StructuredGenerationPort,
+    workflow: &dyn WorkflowExecutionPort,
+    publication: &dyn PublicationPort,
+    progress: &dyn ProgressPort,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let request = DeepResearchRequest::new(
+        "product-run-id",
+        "Assess the Aurora migration boundary",
+        EvidenceScope::WebAndWorkspace,
+    )
+    .with_current_date("2026-07-23")
+    .with_workspace_source_hints(vec![WorkspaceSourceHint::new("docs/aurora.md")]);
+    let result = DeepResearchEngine::new(generation, workflow, publication, progress)
+        .execute_request(request, DeepResearchCancellation::new())
+        .await?;
+
+    let _ = result.publication;
+    let _ = result.artifacts.html.display();
     Ok(())
 }
 

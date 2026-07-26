@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_CLAIM_TEXT_CHARS: usize = 4_000;
 const MAX_GAP_TEXT_CHARS: usize = 2_000;
 const MAX_DERIVATION_CHARS: usize = 1_000;
+const MAX_NARRATIVE_HEADING_CHARS: usize = 180;
+const MAX_NARRATIVE_PARAGRAPH_CLAIMS: usize = 3;
+const DEFAULT_NARRATIVE_PARAGRAPH_CHARS: usize = 900;
 
 pub(in crate::research::compiler) fn admit_claim_ledger(
     contract: &ResearchContract,
@@ -134,13 +137,137 @@ pub(in crate::research::compiler) fn admit_claim_ledger(
     );
     let mut gaps = admit_gaps(contract, catalog, proposal.gaps, &mut rejections);
     insert_host_gaps(contract, &claims, &mut gaps);
+    let narrative_sections = admit_narrative_sections(contract, &claims, proposal.narrative);
 
     Ok(AdmittedClaimLedger {
         claims,
         relations,
         gaps,
+        narrative_sections,
         rejections,
     })
+}
+
+fn admit_narrative_sections(
+    contract: &ResearchContract,
+    claims: &[AdmittedClaim],
+    proposal: Option<NarrativePlanProposal>,
+) -> Vec<AdmittedNarrativeSection> {
+    let mut proposed_sections = proposal.into_iter().flat_map(|plan| plan.sections).fold(
+        BTreeMap::<String, Vec<NarrativeSectionProposal>>::new(),
+        |mut sections, section| {
+            sections
+                .entry(section.dimension_id.clone())
+                .or_default()
+                .push(section);
+            sections
+        },
+    );
+
+    contract
+        .spec
+        .dimensions
+        .iter()
+        .map(|dimension| {
+            let dimension_claims = claims
+                .iter()
+                .filter(|claim| {
+                    claim.dimension_id == dimension.id && claim.placement == ClaimPlacement::Finding
+                })
+                .collect::<Vec<_>>();
+            let proposed = proposed_sections
+                .remove(&dimension.id)
+                .filter(|sections| sections.len() == 1)
+                .and_then(|mut sections| sections.pop())
+                .filter(|section| {
+                    valid_text(&section.heading, MAX_NARRATIVE_HEADING_CHARS)
+                        && narrative_paragraphs_match_claims(&section.paragraphs, &dimension_claims)
+                });
+
+            proposed.map_or_else(
+                || AdmittedNarrativeSection {
+                    dimension_id: dimension.id.clone(),
+                    heading: dimension.question.clone(),
+                    paragraph_claim_ids: default_narrative_paragraphs(&dimension_claims),
+                },
+                |section| AdmittedNarrativeSection {
+                    dimension_id: dimension.id.clone(),
+                    heading: section.heading,
+                    paragraph_claim_ids: section
+                        .paragraphs
+                        .into_iter()
+                        .map(|paragraph| paragraph.claim_ids)
+                        .collect(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn narrative_paragraphs_match_claims(
+    paragraphs: &[NarrativeParagraphProposal],
+    claims: &[&AdmittedClaim],
+) -> bool {
+    if claims.is_empty() {
+        return paragraphs.is_empty();
+    }
+    if paragraphs.is_empty()
+        || paragraphs.iter().any(|paragraph| {
+            paragraph.claim_ids.is_empty()
+                || paragraph.claim_ids.len() > MAX_NARRATIVE_PARAGRAPH_CLAIMS
+        })
+    {
+        return false;
+    }
+    let planned = paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.claim_ids.iter())
+        .collect::<Vec<_>>();
+    if planned.len() != claims.len() {
+        return false;
+    }
+    let positions = planned
+        .iter()
+        .enumerate()
+        .map(|(index, claim_id)| (claim_id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    if positions.len() != planned.len()
+        || claims
+            .iter()
+            .any(|claim| !positions.contains_key(claim.id.as_str()))
+    {
+        return false;
+    }
+    claims.iter().all(|claim| {
+        let claim_position = positions[claim.id.as_str()];
+        claim.basis_claim_ids.iter().all(|basis_id| {
+            positions
+                .get(basis_id.as_str())
+                .is_none_or(|basis_position| *basis_position < claim_position)
+        })
+    })
+}
+
+fn default_narrative_paragraphs(claims: &[&AdmittedClaim]) -> Vec<Vec<String>> {
+    let mut paragraphs = Vec::<Vec<String>>::new();
+    let mut paragraph = Vec::<String>::new();
+    let mut paragraph_chars = 0usize;
+    for claim in claims {
+        let claim_chars = claim.text.chars().count();
+        if !paragraph.is_empty()
+            && (paragraph.len() >= 2
+                || paragraph_chars.saturating_add(claim_chars) > DEFAULT_NARRATIVE_PARAGRAPH_CHARS)
+        {
+            paragraphs.push(std::mem::take(&mut paragraph));
+            paragraph_chars = 0;
+        }
+        paragraph.push(claim.id.clone());
+        paragraph_chars = paragraph_chars.saturating_add(claim_chars);
+    }
+    if !paragraph.is_empty() {
+        paragraphs.push(paragraph);
+    }
+    paragraphs
 }
 
 fn validate_claim_common(
@@ -156,6 +283,12 @@ fn validate_claim_common(
         || has_duplicate_evidence_sources(&claim.evidence_refs)
     {
         return Err(RejectionReason::InvalidText);
+    }
+    if claim
+        .analysis_role
+        .is_some_and(|role| !analysis_role_matches_claim(role, claim.placement, claim.kind))
+    {
+        return Err(RejectionReason::InvalidClaimShape);
     }
     for evidence_ref in &claim.evidence_refs {
         let Some(source) = sources.get(evidence_ref.source_id.as_str()).copied() else {
@@ -181,6 +314,30 @@ fn validate_claim_common(
         }
     }
     Ok(())
+}
+
+fn analysis_role_matches_claim(
+    role: ClaimAnalysisRole,
+    placement: ClaimPlacement,
+    kind: ClaimKind,
+) -> bool {
+    match role {
+        ClaimAnalysisRole::Conclusion => placement == ClaimPlacement::DirectAnswer,
+        ClaimAnalysisRole::Evidence => {
+            placement == ClaimPlacement::Finding && kind == ClaimKind::Fact
+        }
+        ClaimAnalysisRole::Comparison | ClaimAnalysisRole::Explanation => {
+            placement == ClaimPlacement::Finding && kind == ClaimKind::Inference
+        }
+        ClaimAnalysisRole::Challenge | ClaimAnalysisRole::Boundary => {
+            placement == ClaimPlacement::Finding
+                && matches!(kind, ClaimKind::Fact | ClaimKind::Inference)
+        }
+        ClaimAnalysisRole::Implication => {
+            placement == ClaimPlacement::Finding
+                && matches!(kind, ClaimKind::Inference | ClaimKind::Recommendation)
+        }
+    }
 }
 
 fn validate_dependent_claim_shape(

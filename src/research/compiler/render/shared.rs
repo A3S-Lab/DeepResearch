@@ -1,5 +1,5 @@
-use super::super::{ReaderLabels, ReportDocument, ReportSource, StructuralCoverage};
-use std::collections::BTreeMap;
+use super::super::{ReaderLabels, ReportClaim, ReportDocument, ReportSource, StructuralCoverage};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct RenderContext<'a> {
     pub(super) document: &'a ReportDocument,
@@ -37,6 +37,38 @@ impl<'a> RenderContext<'a> {
             .source_ledger
             .iter()
             .find(|source| source.id == source_id)
+    }
+
+    pub(super) fn narrative_paragraphs<'b>(
+        &self,
+        claims: &'b [ReportClaim],
+        paragraph_claim_ids: &[Vec<String>],
+    ) -> Vec<Vec<&'b ReportClaim>> {
+        let claims_by_id = claims
+            .iter()
+            .map(|claim| (claim.id.as_str(), claim))
+            .collect::<BTreeMap<_, _>>();
+        let mut seen = BTreeSet::<&str>::new();
+        let mut paragraphs = paragraph_claim_ids
+            .iter()
+            .filter_map(|claim_ids| {
+                let paragraph = claim_ids
+                    .iter()
+                    .filter_map(|claim_id| {
+                        let claim = claims_by_id.get(claim_id.as_str()).copied()?;
+                        seen.insert(claim.id.as_str()).then_some(claim)
+                    })
+                    .collect::<Vec<_>>();
+                (!paragraph.is_empty()).then_some(paragraph)
+            })
+            .collect::<Vec<_>>();
+        paragraphs.extend(
+            claims
+                .iter()
+                .filter(|claim| seen.insert(claim.id.as_str()))
+                .map(|claim| vec![claim]),
+        );
+        paragraphs
     }
 
     pub(super) fn coverage_label(&self, coverage: StructuralCoverage) -> &str {

@@ -1,19 +1,26 @@
 async function run(ctx, inputs) {
-  const MAX_SOURCES = 8;
+  const MAX_SOURCES = 12;
   const MAX_CATALOG_SOURCES = 16;
-  const MAX_DISCOVERY_CANDIDATES = 35;
-  // Keep a complete bounded catalog without positional sampling. Source-local
-  // selector windows below keep every admitted chunk inside the generation
+  const MAX_PLANNER_COMPLETION_CRITERIA = 3;
+  const MAX_SEARCH_QUERIES = 8;
+  const MAX_RESULTS_PER_SEARCH = 16;
+  const MAX_SEED_URLS = 3;
+  const MAX_DISCOVERY_CANDIDATES =
+    MAX_SEARCH_QUERIES * MAX_RESULTS_PER_SEARCH + MAX_SEED_URLS;
+  // Keep a complete bounded catalog without positional sampling. Source-aware
+  // selector packets below keep every admitted chunk inside the generation
   // transport limit before the existing exact-ID reduction pass.
-  const MAX_CHUNKS = 640;
+  const MAX_CHUNKS = 1280;
   const MAX_CHUNK_CHARS = 700;
-  // Small catalogs use one direct selector. Larger catalogs are split only on
-  // source identity: one model call sees the complete fetched text for one
-  // source, so it can choose the best excerpts without a lossy map/reduce
-  // cascade or arbitrating unrelated source contracts.
+  // Small catalogs use one direct selector. Larger catalogs first split each
+  // source into complete byte-bounded units, then pack units from distinct
+  // sources together. A large source may span packets, while the later exact-ID
+  // source reduction still chooses its strongest excerpts across every unit.
   const MAX_DIRECT_SELECTOR_CHUNKS = 10;
   const MAX_SELECTOR_SHARD_CANDIDATES = 4;
-  const MAX_SELECTOR_SHARD_PACKET_BYTES = 32 * 1024;
+  // Leave room for the selector instructions inside the runtime's 128 KiB
+  // prompt ceiling; this limit applies only to the serialized packet.
+  const MAX_SELECTOR_SHARD_PACKET_BYTES = 112 * 1024;
   const MAX_EXCERPTS_PER_SOURCE = 4;
   const MAX_EXCERPT_CHARS_PER_SOURCE = 2800;
   const MAX_DOCUMENT_RANGES = 3;
@@ -39,6 +46,8 @@ async function run(ctx, inputs) {
   const STEP_LOCAL = "retrieve_local";
   const STEP_SELECT = "select_evidence_chunks";
   const STEP_SELECT_SHARD_PREFIX = "select_evidence_chunks_shard_";
+  const STEP_SELECT_SHARD_RECOVERY_PREFIX =
+    "select_evidence_chunks_shard_recovery_";
   const STEP_SELECT_SOURCE_PREFIX = "select_evidence_chunks_source_";
   const STEP_CHECKPOINT_BOOTSTRAP = "checkpoint_bootstrap_acquisition";
   const STEP_CHECKPOINT_INITIAL = "checkpoint_initial_retrieval";
@@ -48,6 +57,8 @@ async function run(ctx, inputs) {
   const STEP_SELECT_SUPPLEMENTAL = "select_supplemental_evidence_chunks";
   const STEP_SELECT_SUPPLEMENTAL_SHARD_PREFIX =
     "select_supplemental_evidence_chunks_shard_";
+  const STEP_SELECT_SUPPLEMENTAL_SHARD_RECOVERY_PREFIX =
+    "select_supplemental_evidence_chunks_shard_recovery_";
   const STEP_SELECT_SUPPLEMENTAL_SOURCE_PREFIX =
     "select_supplemental_evidence_chunks_source_";
 
@@ -679,11 +690,36 @@ async function run(ctx, inputs) {
     const tracks = Array.isArray(plan.tracks) ? plan.tracks : [];
     return tracks.slice(0, 4).map((track, index) => {
       const item = object(track);
-      const questions = Array.isArray(item.questions)
-        ? item.questions.filter(nonEmpty)
-        : [];
+      const questions = (Array.isArray(item.questions) ? item.questions : [])
+        .map((question) => {
+          if (nonEmpty(question)) {
+            return {
+              question: question.trim(),
+              role: "",
+              completion_criterion_indexes: [],
+            };
+          }
+          const structured = object(question);
+          return nonEmpty(structured.question)
+            ? {
+                question: structured.question.trim(),
+                role: nonEmpty(structured.role) ? structured.role.trim() : "",
+                completion_criterion_indexes: Array.isArray(
+                    structured.completion_criterion_indexes
+                  )
+                  ? structured.completion_criterion_indexes.filter(
+                      Number.isSafeInteger
+                    )
+                  : [],
+              }
+            : null;
+        })
+        .filter(Boolean)
+        .slice(0, 4);
       const completionCriteria = Array.isArray(item.completion_criteria)
-        ? item.completion_criteria.filter(nonEmpty).slice(0, 2)
+        ? item.completion_criteria
+            .filter(nonEmpty)
+            .slice(0, MAX_PLANNER_COMPLETION_CRITERIA)
         : [];
       const evidenceRequirements = object(item.evidence_requirements);
       return {
@@ -699,8 +735,13 @@ async function run(ctx, inputs) {
           independent_corroboration_required:
             evidenceRequirements.independent_corroboration_required === true,
         },
+        research_questions: questions,
         focus: bounded(
-          uniqueStrings([item.title, item.focus, ...questions]).join(": "),
+          uniqueStrings([
+            item.title,
+            item.focus,
+            ...questions.map((question) => question.question),
+          ]).join(": "),
           900
         ),
       };
@@ -772,11 +813,59 @@ async function run(ctx, inputs) {
       error: "",
     };
   };
-  const combinedEvidencePacket = (plan, retrievals) => {
+  const combinedEvidencePacket = (plan, retrievals, sourcePrefix) => {
     const focuses = planFocuses(plan);
-    const sources = retrievals
+    const prefix = nonEmpty(sourcePrefix)
+      ? sourcePrefix
+      : "catalog-source";
+    const rawSources = retrievals
       .filter((retrieval) => retrieval && retrieval.packet)
       .flatMap((retrieval) => retrieval.packet.sources || []);
+    const mergedSources = [];
+    const sourceIndexByAnchor = new Map();
+    for (let sourceIndex = 0; sourceIndex < rawSources.length; sourceIndex += 1) {
+      const source = rawSources[sourceIndex];
+      const anchor = String(source.url_or_path || "").trim();
+      const identity = canonicalUrl(anchor) ||
+        (anchor ? `path:${anchor}` : `unanchored:${sourceIndex}`);
+      const existingIndex = sourceIndexByAnchor.get(identity);
+      if (existingIndex === undefined) {
+        sourceIndexByAnchor.set(identity, mergedSources.length);
+        mergedSources.push(Object.assign({}, source, {
+          chunks: Array.isArray(source.chunks) ? [...source.chunks] : [],
+        }));
+        continue;
+      }
+      const existing = mergedSources[existingIndex];
+      const observedTexts = new Set(
+        existing.chunks.map((chunk) => String(chunk.text || ""))
+      );
+      for (const chunk of Array.isArray(source.chunks) ? source.chunks : []) {
+        const text = String(chunk.text || "");
+        if (!text || observedTexts.has(text)) {
+          continue;
+        }
+        observedTexts.add(text);
+        existing.chunks.push(chunk);
+      }
+      if (!nonEmpty(existing.title) && nonEmpty(source.title)) {
+        existing.title = source.title;
+      }
+    }
+    const sources = mergedSources.map((source, sourceIndex) => {
+        const sourceId = `${prefix}-${sourceIndex + 1}`;
+        const chunks = Array.isArray(source.chunks)
+          ? source.chunks.map((chunk, chunkIndex) =>
+              Object.assign({}, chunk, {
+                chunk_id: `${sourceId}:chunk:${chunkIndex + 1}`,
+              })
+            )
+          : [];
+        return Object.assign({}, source, {
+          source_id: sourceId,
+          chunks,
+        });
+      });
     const chunkCount = sources.reduce(
       (total, source) =>
         total + (Array.isArray(source.chunks) ? source.chunks.length : 0),

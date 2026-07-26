@@ -45,19 +45,6 @@
     .replace(/\\/g, "/")
     .replace(/^\.\//, "")
     .replace(/\/+/g, "/");
-  const observedLocalAnchor = (reported, anchors) => {
-    const candidate = normalizeLocalPath(reported);
-    if (!candidate) {
-      return "";
-    }
-    for (const anchor of anchors) {
-      const observed = normalizeLocalPath(anchor.url_or_path);
-      if (candidate === observed) {
-        return observed;
-      }
-    }
-    return "";
-  };
   const cleanLocalReadText = (value, offset, returnedLines) => {
     if (
       !Number.isSafeInteger(offset) ||

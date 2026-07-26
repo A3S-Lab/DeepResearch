@@ -25,6 +25,7 @@ use projection::{
 struct ActiveReplayRuntime {
     outline: Value,
     report: Mutex<Option<Result<Value, String>>>,
+    editorial: Mutex<Option<Result<Value, String>>>,
     bootstrap: WorkflowOutput,
     planned: WorkflowOutput,
     workspace: PathBuf,
@@ -36,15 +37,21 @@ struct ActiveReplayRuntime {
 
 impl ActiveReplayRuntime {
     fn new(replay: &FrozenReplay, workspace: PathBuf) -> Self {
+        let proposal = report_proposal(replay);
+        let editorial = proposal
+            .get("narrative")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "sections": [] }));
         let report = match replay.fault.as_ref() {
             Some(FrozenFault::ReportGenerationTimeout) => {
                 Err("scripted typed report-generation timeout".to_string())
             }
-            _ => Ok(report_proposal(replay)),
+            _ => Ok(proposal),
         };
         Self {
             outline: planner_outline(replay),
             report: Mutex::new(Some(report)),
+            editorial: Mutex::new(Some(Ok(editorial))),
             bootstrap: bootstrap_output(replay),
             planned: planned_output(replay),
             workspace,
@@ -71,6 +78,12 @@ impl StructuredGenerationPort for ActiveReplayRuntime {
                 .expect("report result lock")
                 .take()
                 .expect("one report request"),
+            GenerationStage::Editorial => self
+                .editorial
+                .lock()
+                .expect("editorial result lock")
+                .take()
+                .expect("one editorial request"),
         }
     }
 }
@@ -296,6 +309,7 @@ fn active_report_wire_contract_exposes_the_typed_claim_graph() {
     assert!(top_level.contains_key("claims"));
     assert!(top_level.contains_key("relations"));
     assert!(top_level.contains_key("gaps"));
+    assert!(top_level.contains_key("narrative"));
     assert!(claim.contains_key("kind"));
     assert!(claim.contains_key("basis_claim_ids"));
     assert!(claim.contains_key("derivation"));

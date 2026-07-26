@@ -42,10 +42,10 @@ product surface:
 ```rust,no_run
 use a3s_deep_research::{
     engine::{
-        DeepResearchEngine, EngineLimits, ProgressPort, PublicationPort,
-        StructuredGenerationPort, WorkflowExecutionPort,
+        DeepResearchCancellation, DeepResearchEngine, DeepResearchRequest,
+        EngineLimits, EvidenceScope, ProgressPort, PublicationPort,
+        StructuredGenerationPort, WorkflowExecutionPort, WorkspaceSourceHint,
     },
-    planner::deep_research_loop_contract,
 };
 
 async fn research(
@@ -56,45 +56,74 @@ async fn research(
     query: &str,
     current_date: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let evidence_scope = "web_and_workspace";
-    let input = serde_json::json!({
-        "run_id": "product-run-id",
-        "input": {
-            "query": query,
-            "current_date": current_date,
-            "evidence_scope": evidence_scope,
-            "loop_contract": deep_research_loop_contract(
-                query,
-                current_date,
-                evidence_scope,
-                4,
-            )
-        }
-    });
+    let request = DeepResearchRequest::new(
+        "product-run-id",
+        query,
+        EvidenceScope::WebAndWorkspace,
+    )
+    .with_current_date(current_date)
+    .with_workspace_source_hints(vec![
+        WorkspaceSourceHint::new("docs/product-context.md"),
+    ]);
+    let cancellation = DeepResearchCancellation::new();
 
-    let run = DeepResearchEngine::new(generation, workflow, publication, progress)
+    let result = DeepResearchEngine::new(generation, workflow, publication, progress)
         .with_limits(EngineLimits::default())
-        .execute(input)
+        .execute_request(request, cancellation)
         .await?;
 
-    println!("{}", run.artifacts.html.display());
+    println!("{}", result.artifacts.html.display());
     Ok(())
 }
 ```
 
-`DeepResearchRun` returns the terminal publication class, artifact paths, and a
-structured output that a host can expose through its existing result surface.
+`DeepResearchResult` keeps the completed lifecycle separate from the terminal
+`PublicationOutcome`, and returns typed quality metrics plus exact artifact
+paths. `execute(Value)` and `DeepResearchRun` remain available as a legacy
+adapter while products migrate away from constructing or parsing engine JSON.
+The typed result's diagnostic `output` uses the same four publication names and
+exposes only `artifact_kinds`; exact filesystem paths remain confined to the
+typed `artifacts` field.
+
+`DeepResearchRequest::new` infers the reader language from the query. A product
+with an explicit locale selection may replace it with
+`with_output_language("zh")` or another validated BCP 47 tag.
 
 ## Features
 
 - **Exact-Query Bootstrap**: Start retrieval from the unmodified user query
-  while semantic planning runs concurrently
-- **Bounded Semantic Planning**: Add validated research tracks and at most three
-  supplemental plain-text queries without replacing the original query
+  while semantic planning runs concurrently, and promote at most three explicit
+  HTTP(S) references in that query to direct retrieval seeds
+- **Bounded Semantic Planning**: Add validated research tracks and at most seven
+  supplemental plain-text queries without replacing the original query; named
+  comparisons receive a shared synthesis track, and comprehensive question-role
+  coverage is validated across the complete plan
 - **Closed Evidence Admission**: Admit only exact source and chunk identities
   selected through typed track, criterion, and source-role edges
 - **Typed Claim Graphs**: Distinguish facts, inferences, and recommendations,
   with explicit citations, basis edges, derivations, contradictions, and gaps
+- **Reader-Language Pinning**: Infer or accept one BCP 47 output language and
+  bind planning, report schema, admission, and publication to that exact value
+- **Per-Dimension Depth Gate**: Require every resolved material dimension in a
+  comprehensive report to contain a direct answer, two factual findings from
+  distinct sources, a multi-step analytical chain, and an explicit implication
+  or applicability boundary. If every dimension remains bounded, exactly one
+  qualified partial conclusion may publish only when it passes the same depth
+  gate and retains an explicit typed gap
+- **Evidence-Preserving Narrative Planning**: Let the model choose natural
+  section headings and paragraph groupings only after the claim graph is
+  complete; the Host verifies that every finding appears exactly once and that
+  the plan cannot add or rewrite evidence
+- **Continuous Argument Rendering**: Render claims in authored paragraph order
+  without fixed evidence/analysis/recommendation subheadings, while keeping
+  basis edges and reproducible derivations available in a collapsed
+  traceability disclosure
+- **Fixed A3S Report Design**: Render every HTML publication outcome through
+  one A3S Code Web-aligned token system; legacy presentation metadata cannot
+  change the palette, hero, density, typography, or section composition. The
+  shared renderer uses a sticky left action menu, a centered report surface,
+  and a sticky right table of contents on desktop; narrow screens stack the
+  action menu and table of contents ahead of the report without page overflow
 - **Progressive Publication**: Preserve a source-backed report before attempting
   synthesized or qualified publication
 - **Explicit Evidence Boundaries**: Publish a no-evidence report when no source
@@ -103,6 +132,12 @@ structured output that a host can expose through its existing result surface.
   recoverable generation
 - **Run-Scoped Recovery**: Bind terminal publication to the exact run, query,
   quality metrics, and full artifact hashes
+- **Typed Lifecycle Events**: Emit run, stage, publication, cancellation, and
+  failure events without inferring state from report prose
+- **Cooperative Cancellation**: Drop in-flight port futures and prevent later
+  stages from publishing after cancellation
+- **Explicit Workspace Hints**: Acquire validated relative context paths through
+  the same exact-path provenance boundary as discovered workspace evidence
 - **Replaceable Product Ports**: Keep model execution, workflow runtime,
   artifact storage, provider policy, and progress presentation in the host
 - **Replayable Contracts**: Exercise production control flow with frozen,
@@ -142,10 +177,12 @@ workflow runtime, search providers, persistence, and presentation layer.
 | `StructuredGenerationPort` | Execute the closed planning and report-object contracts |
 | `WorkflowExecutionPort` | Run bootstrap and planned retrieval workflows |
 | `PublicationPort` | Materialize the requested report class and return exact artifact paths |
-| `ProgressPort` | Present product-specific stage progress and degradation events |
+| `ProgressPort` | Persist or present typed run, stage, publication, cancellation, and failure events |
 
 All four traits are `Send + Sync`. `NoopProgress` is available when the host
-does not need progress events.
+does not need progress events. Existing implementations of `report_progress`
+continue to receive stage events; new adapters should implement `report_event`
+to preserve the complete lifecycle.
 
 ### Configure execution limits
 
@@ -166,6 +203,12 @@ evidence tracks, completion criteria, and bounded supplemental queries. It
 cannot return URLs, choose transport budgets, replace the exact query, or
 publish facts. If planning is invalid or unavailable, the engine continues from
 the exact query under a conservative comprehensive, freshness-aware gate.
+
+For web-capable evidence scopes, the Host also extracts at most three explicit
+HTTP(S) references from the exact user query as direct retrieval seeds. It
+removes fragments, rejects credential-bearing or malformed references, and
+deduplicates normalized URLs. `local_only` scope never emits these seeds and
+remains network-free.
 
 ```text
 exact user query ──> bootstrap retrieval ───────────────┐
@@ -203,6 +246,11 @@ completion order. A completed source can therefore be reused after restart,
 while an ambiguous running effect is redelivered with the same attempt under
 at-least-once semantics.
 
+When typed coverage remains incomplete, the existing single supplemental pass
+may consider both unused discovery results and explicit HTTPS references from
+semantically retained evidence. It still fetches at most two sources, and every
+fetched reference must pass the same closed semantic evidence selection.
+
 Replay decisions use only exact run, stage, step, and candidate identities plus
 typed state. Retrieval retries are equally closed: only object-shaped error
 metadata whose exact `type` is `timeout` or `transport` authorizes the one
@@ -229,8 +277,48 @@ and typed relationships:
 Track relevance never closes a completion criterion, and criterion coverage
 never manufactures a claim. A focused report may publish one structurally
 sufficient cited claim. A comprehensive report reaches `Synthesized` only when
-its admitted graph closes every material dimension; otherwise useful findings
-remain `Qualified` with an explicit gap.
+its admitted graph closes every material dimension. A report with both deeply
+analyzed resolved dimensions and unresolved dimensions remains `Qualified` with
+explicit typed gaps. When every dimension is unresolved, the Host admits at
+most one qualified partial conclusion, and only if that bounded dimension
+independently satisfies the full two-source analytical depth gate and retains
+its gap.
+
+The typed comprehensive gate retains the report-wide floor of one direct
+answer, five supporting findings, six admitted claims, two cited sources, and
+1,200 non-whitespace claim characters. It also evaluates every resolved material
+dimension independently. Each such dimension needs exactly one leading answer,
+at least two factual findings whose support spans two attributable sources, at
+least two inferences, at least three analytical claims in total, one
+cross-source synthesis, and 800 substantive characters. The generation
+contract asks those analytical steps to cover source comparison, mechanism or
+trade-off, practical implication, and an applicability boundary or
+counterexample. Repeated openings and near-duplicate claim prose are rejected;
+multi-cited facts, three paraphrases of one conclusion, and source-by-source
+summaries do not satisfy this requirement.
+
+The engine persists both the number of resolved material dimensions and the
+number that passed this deeper gate. A synthesized report, or a qualified
+report with resolved dimensions, is valid only when those counts are equal. The
+all-bounded exception is represented explicitly as zero resolved dimensions,
+one deeply analyzed bounded dimension, exactly one direct answer, and at least
+one typed gap. Restart recovery therefore cannot promote an older report whose
+aggregate metrics hide a thin section.
+
+After the graph is complete, the model returns a bounded narrative plan
+containing only natural section headings and ordered claim-ID groups. The Host
+requires one section per research dimension and an exact, in-order placement
+of every finding. Renderers then project those groups as continuous prose
+instead of fixed evidence, analysis, and recommendation cards. Basis edges and
+derivations remain available in a collapsed traceability disclosure, so the
+default reading path stays editorial while the evidence path remains
+auditable.
+
+An inference or recommendation may combine admitted premises from other
+dimensions through explicit basis edges. Those edges do not manufacture
+criterion coverage. After claim admission, the Host recomputes coverage from
+the sources actually used by the accepted claims and adds a typed gap when that
+smaller evidence set no longer satisfies a declared source requirement.
 
 Small source catalogs use one closed selector. Larger catalogs are partitioned
 into complete source-local JSON windows of at most 32 KiB, followed by an
@@ -238,10 +326,18 @@ exact-ID reduction that retains at most four excerpts per source. The current
 report attempt receives a generated JSON Schema whose dimension, source, and
 chunk enums contain only that closed packet.
 
-Reader prose is untrusted data. The Host does not compare query, claim, source,
-title, URL, publisher, language, numbers, or punctuation to make admission
-decisions. Reader-facing labels and evidence-boundary prose arrive inside the
-typed proposal, are shape-validated, and are rendered as inert text.
+Reader prose is untrusted data. The Host never derives identity, relevance, or
+evidence support from query, claim, source, title, URL, publisher, numbers, or
+punctuation. It does pin `report_language` to the request-owned output language
+and rejects obvious aggregate prose-language mismatches. Source-defined names
+and quotations may remain in their original language. Reader-facing labels and
+evidence-boundary prose arrive inside the typed proposal, are shape-validated,
+and are rendered as inert text.
+
+The planner writes titles, tracks, criteria, and the final report in the pinned
+reader language. Supplemental retrieval queries may use a source's native
+language when that materially improves recall; this never changes the report
+language.
 
 ## Publication and Recovery
 
@@ -259,18 +355,29 @@ digests match; otherwise it restores the complete previous pair. An interrupted
 first publication is removed instead of exposing mismatched formats.
 
 A successful publication also persists a run-scoped receipt before the port
-returns. Receipt schema version 2 binds:
+returns. New product adapters write the report pair under
+`.a3s/research/artifacts/<run-id>/`; legacy query-slug reports remain readable
+but are no longer the target for new runs. Receipt schema version 5 binds:
 
 - hashes of the exact run identity and query;
+- the request-owned output language;
 - the closed publication outcome;
-- claim, relation, derivation, basis-edge, gap, citation, and source metrics;
+- claim, relation, derivation, basis-edge, analytical-claim, cross-source
+  synthesis, resolved-dimension, deeply-analyzed-dimension, gap, citation, and
+  source metrics;
 - the complete Markdown and HTML SHA-256 digests.
 
-Version 1 receipts remain readable with zero graph counts, but cannot authorize
-`Qualified` without an explicit gap. `resolve_deep_research_run_publication`
-uses the receipt to recover a committed terminal result after a crash between
-artifact publication and the host's terminal journal event. If a workflow
-envelope and receipt both exist, their outcome, metrics, and artifact paths must
+Version 1 and 2 receipts remain readable with missing metrics defaulted to
+zero, and version 3 remains readable without a language binding. Version 4 has
+the language binding but predates per-dimension depth metrics. These receipts
+cannot authorize `Qualified` without an explicit gap, and an older
+comprehensive receipt cannot pass the current per-dimension depth gate. The
+compatibility recovery API may read legacy receipts, while language-bound
+recovery treats versions without a language as absent. New recovery paths keep
+the version-4 language binding and add the version-5 depth metrics;
+`resolve_deep_research_run_publication_in_language` additionally requires a
+workflow envelope to carry the same language. If a workflow envelope and
+receipt both exist, their outcome, metrics, language, and artifact paths must
 agree exactly.
 
 Interrupted acquisition can be retained separately with

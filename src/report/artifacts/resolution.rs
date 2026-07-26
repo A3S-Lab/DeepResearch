@@ -69,17 +69,43 @@ fn trusted_research_report_artifact_paths(
     }
     let report_dir = unresolved_report_dir.canonicalize().ok()?;
     let rel = report_dir.strip_prefix(&root).ok()?;
-    let mut components = rel.components();
-    let first = components.next()?.as_os_str();
-    let second = components.next()?.as_os_str();
-    let slug = components.next()?.as_os_str();
-    if components.next().is_some() {
+    let components = rel
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    let valid_shape = match components.as_slice() {
+        [first, second, slug]
+            if *first == std::ffi::OsStr::new(".a3s")
+                && *second == std::ffi::OsStr::new("research")
+                && *slug != std::ffi::OsStr::new("artifacts")
+                && !slug.is_empty() =>
+        {
+            true
+        }
+        [first, second, artifacts, run_id]
+            if *first == std::ffi::OsStr::new(".a3s")
+                && *second == std::ffi::OsStr::new("research")
+                && *artifacts == std::ffi::OsStr::new("artifacts") =>
+        {
+            run_id
+                .to_str()
+                .is_some_and(|run_id| validate_deep_research_run_id(run_id).is_ok())
+        }
+        _ => false,
+    };
+    if !valid_shape {
         return None;
     }
-    if first != std::ffi::OsStr::new(".a3s") || second != std::ffi::OsStr::new("research") {
-        return None;
-    }
-    if slug.is_empty() {
+    let plain_directory = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .ok()
+            .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    };
+    if !plain_directory(&root.join(".a3s"))
+        || !plain_directory(&root.join(".a3s").join("research"))
+        || (components.len() == 4
+            && !plain_directory(&root.join(".a3s").join("research").join("artifacts")))
+    {
         return None;
     }
     let html_path = report_dir.join("index.html");
@@ -392,6 +418,10 @@ fn complete_html_document(html: &str) -> bool {
         return false;
     };
     let lower = document.to_ascii_lowercase();
+    let has_script = lower.contains("<script");
+    let has_safe_script_contract = !has_script
+        || (document.contains(html_host::REPORT_HOST_UI_ATTRIBUTE)
+            && html_host::document_has_only_fixed_host_script(document));
     document.contains(DEEP_RESEARCH_HTML_DOCUMENT_ATTR)
         && lower.contains("<html")
         && lower.contains("</html>")
@@ -406,7 +436,7 @@ fn complete_html_document(html: &str) -> bool {
         && lower.contains("<article")
         && lower.contains("</article>")
         && lower.matches("<h1").count() == 1
-        && !lower.contains("<script")
+        && has_safe_script_contract
 }
 
 fn html_document_after_optional_artifact_marker(html: &str) -> Option<&str> {

@@ -68,11 +68,6 @@ pub fn queue_plan_questions(
             .get("material")
             .and_then(Value::as_bool)
             .ok_or_else(|| "DeepResearch plan track omitted boolean `material`".to_string())?;
-        let prompts = string_array(
-            track.get("questions"),
-            "track questions",
-            limits.max_questions,
-        )?;
         let completion_criterion_count = track
             .get("completion_criteria")
             .and_then(Value::as_array)
@@ -81,26 +76,34 @@ pub fn queue_plan_questions(
             .ok_or_else(|| {
                 format!("DeepResearch plan track `{obligation_id}` has no completion criteria")
             })?;
+        let prompts = validated_plan_questions(
+            track.get("questions"),
+            "track questions",
+            completion_criterion_count,
+            false,
+        )?;
         let question_count = prompts.len();
-        for (question_index, prompt) in prompts.into_iter().enumerate() {
+        for (question_index, planned_question) in prompts.into_iter().enumerate() {
             // Planner-authored IDs are display metadata and may contain
             // provider-dependent punctuation. Inquiry identity is owned by
             // the host so replay and downstream closed schemas remain stable.
             let id = format!("question:plan-{}-{}", track_index + 1, question_index + 1);
-            let mut question = Question::queued(id, None, prompt);
+            let mut question = Question::queued(id, None, planned_question.prompt);
             question.obligation_ids = vec![obligation_id.to_string()];
-            question.completion_criterion_indexes = if question_count == completion_criterion_count
-            {
-                vec![question_index]
-            } else if question_count == 1 {
-                (0..completion_criterion_count).collect()
-            } else if completion_criterion_count == 1 {
-                vec![0]
-            } else {
-                return Err(format!(
+            question.completion_criterion_indexes =
+                if let Some(indexes) = planned_question.completion_criterion_indexes {
+                    indexes
+                } else if question_count == completion_criterion_count {
+                    vec![question_index]
+                } else if question_count == 1 {
+                    (0..completion_criterion_count).collect()
+                } else if completion_criterion_count == 1 {
+                    vec![0]
+                } else {
+                    return Err(format!(
                         "DeepResearch plan track `{obligation_id}` cannot map {question_count} questions onto {completion_criterion_count} completion criteria"
                     ));
-            };
+                };
             question.material = material;
             question.round = 0;
             questions.push(question);
@@ -124,7 +127,11 @@ pub fn workflow_args_with_plan(
 ) -> Result<Value, String> {
     // Flow compares this input byte-for-byte when a stable run is resumed, so
     // wall-clock origins belong to Flow history rather than durable input.
-    exact_string_array(plan.get("search_queries"), "search_queries", 4)?;
+    exact_string_array(
+        plan.get("search_queries"),
+        "search_queries",
+        MAX_PLANNER_SEARCHES as usize,
+    )?;
     let plan = normalize_planner_budget(plan)?;
     let input = args
         .get_mut("input")
@@ -160,6 +167,7 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
         .pointer("/input/evidence_scope")
         .and_then(Value::as_str)
         == Some("local_only");
+    let workspace_evidence_required = local_only || has_workspace_source_hints(workflow_args);
     let report_title = bounded_fallback_text(query, 160);
     let focus = bounded_fallback_text(query, 500);
     let criterion = bounded_fallback_text(query, 240);
@@ -167,6 +175,11 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
         Vec::new()
     } else {
         vec![query.to_string()]
+    };
+    let seed_urls = if local_only {
+        Vec::new()
+    } else {
+        user_query_seed_urls(query)
     };
     let direct_searches = search_queries.len();
     let plan = serde_json::json!({
@@ -177,7 +190,7 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
         // Unknown temporal requirements likewise fail toward the stronger
         // evidence contract instead of authorizing an undated final answer.
         "freshness_required": true,
-        "workspace_evidence_required": local_only,
+        "workspace_evidence_required": workspace_evidence_required,
         "tracks": [{
             "id": "request.primary",
             "title": bounded_fallback_text(query, 160),
@@ -191,11 +204,11 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
             }
         }],
         "search_queries": search_queries,
-        "seed_urls": [],
+        "seed_urls": seed_urls,
         "budget": {
             "retrieval_timeout_ms": 150_000,
             "direct_searches": direct_searches,
-            "direct_fetches": if local_only { 0 } else { 8 }
+            "direct_fetches": if local_only { 0 } else { MAX_PLANNER_INITIAL_FETCHES }
         },
         "stop_conditions": [
             "Material evidence is retained or the request is explicitly bounded."
@@ -222,34 +235,34 @@ pub fn host_plan_from_outline(
         .pointer("/input/evidence_scope")
         .and_then(Value::as_str)
         == Some("local_only");
+    let workspace_evidence_required = local_only || has_workspace_source_hints(workflow_args);
     let mut outline = close_semantic_outline(outline)?;
-    let targets = semantic_outline_track_targets(&outline)?;
-    let tracks = targets
-        .into_iter()
-        .map(|target| {
-            let mut target = target
-                .as_object()
-                .cloned()
-                .ok_or_else(|| "DeepResearch outline contains a non-object target".to_string())?;
-            let focus = required_text(&target, "focus")?.to_string();
-            target.insert(
-                "questions".to_string(),
-                Value::Array(vec![Value::String(bounded_fallback_text(&focus, 240))]),
-            );
-            Ok(Value::Object(target))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let output_language = workflow_args
+        .pointer("/input/output_language")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        // `DeepResearchRequest` always supplies this field. Legacy adapters
+        // retain language fidelity by deriving it from the exact user query
+        // at the same Host boundary.
+        .unwrap_or_else(|| crate::language::infer_deep_research_output_language(query));
+    if !semantic_outline_matches_output_language(&outline, &output_language) {
+        return Err(
+            "DeepResearch semantic planner returned reader-facing fields in a different language"
+                .to_string(),
+        );
+    }
+    let tracks = semantic_outline_track_targets(&outline)?;
     let object = outline
         .as_object_mut()
         .ok_or_else(|| "DeepResearch outline planner returned a non-object fragment".to_string())?;
     object.insert("tracks".to_string(), Value::Array(tracks));
-    if local_only {
+    if workspace_evidence_required {
         object.insert("workspace_evidence_required".to_string(), Value::Bool(true));
     }
     let supplemental_queries = exact_string_array(
         object.get("supplemental_queries"),
         "supplemental_queries",
-        3,
+        MAX_PLANNER_SUPPLEMENTAL_QUERIES,
     )?;
     object.remove("supplemental_queries");
     let search_queries = if local_only {
@@ -263,16 +276,63 @@ pub fn host_plan_from_outline(
         serde_json::to_value(search_queries)
             .map_err(|error| format!("encode Host search queries: {error}"))?,
     );
-    object.insert("seed_urls".to_string(), Value::Array(Vec::new()));
+    object.insert(
+        "seed_urls".to_string(),
+        serde_json::to_value(if local_only {
+            Vec::new()
+        } else {
+            user_query_seed_urls(query)
+        })
+        .map_err(|error| format!("encode Host seed URLs: {error}"))?,
+    );
     object.insert(
         "budget".to_string(),
         serde_json::json!({
             "retrieval_timeout_ms": 150_000,
             "direct_searches": direct_searches,
-            "direct_fetches": if local_only { 0 } else { 8 }
+            "direct_fetches": if local_only { 0 } else { MAX_PLANNER_INITIAL_FETCHES }
         }),
     );
     validate_plan(outline)
+}
+
+fn has_workspace_source_hints(workflow_args: &Value) -> bool {
+    workflow_args
+        .pointer("/input/workspace_source_hints")
+        .and_then(Value::as_array)
+        .is_some_and(|hints| !hints.is_empty())
+}
+
+fn semantic_outline_matches_output_language(outline: &Value, output_language: &str) -> bool {
+    let mut reader_text = outline
+        .get("report_title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    for track in outline
+        .get("tracks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for field in ["title", "focus"] {
+            if let Some(value) = track.get(field).and_then(Value::as_str) {
+                reader_text.push('\n');
+                reader_text.push_str(value);
+            }
+        }
+        for criterion in track
+            .get("completion_criteria")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            reader_text.push('\n');
+            reader_text.push_str(criterion);
+        }
+    }
+    crate::language::reader_text_matches_output_language(&reader_text, output_language)
 }
 
 pub fn bootstrap_workflow_args(args: Value, run_id: &str) -> Result<Value, String> {
@@ -342,6 +402,58 @@ fn query_is_standalone_url(query: &str) -> bool {
     reqwest::Url::parse(query).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
     })
+}
+
+fn user_query_seed_urls(query: &str) -> Vec<String> {
+    const MAX_USER_SEED_URLS: usize = 3;
+    const MAX_USER_SEED_URL_CHARS: usize = 2_048;
+
+    let lower = query.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    let mut urls = Vec::new();
+    while cursor < query.len() && urls.len() < MAX_USER_SEED_URLS {
+        let Some(start) = ["https://", "http://"]
+            .into_iter()
+            .filter_map(|prefix| lower[cursor..].find(prefix).map(|offset| cursor + offset))
+            .min()
+        else {
+            break;
+        };
+        let end = query[start..]
+            .char_indices()
+            .find_map(|(offset, character)| {
+                (character.is_whitespace()
+                    || matches!(
+                        character,
+                        '<' | '>' | '"' | '\'' | '`' | '。' | '，' | '；' | '！' | '？'
+                    ))
+                .then_some(start + offset)
+            })
+            .unwrap_or(query.len());
+        let candidate = query[start..end].trim_end_matches([
+            '.', ',', ';', ':', '!', '?', ')', ']', '}', '。', '，', '；', '！', '？',
+        ]);
+        cursor = end.max(start + "http://".len());
+        if candidate.chars().count() > MAX_USER_SEED_URL_CHARS {
+            continue;
+        }
+        let Ok(mut url) = reqwest::Url::parse(candidate) else {
+            continue;
+        };
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            continue;
+        }
+        url.set_fragment(None);
+        let normalized = url.to_string();
+        if !urls.contains(&normalized) {
+            urls.push(normalized);
+        }
+    }
+    urls
 }
 
 fn normalize_planner_budget(mut plan: Value) -> Result<Value, String> {

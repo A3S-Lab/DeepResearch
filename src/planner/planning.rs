@@ -1,4 +1,4 @@
-const DEEP_RESEARCH_LOOP_STAGES: [&str; 8] = [
+const DEEP_RESEARCH_LOOP_STAGES: [&str; 9] = [
     "bootstrap_acquisition",
     "optional_outline",
     "batched_evidence_extraction",
@@ -6,14 +6,16 @@ const DEEP_RESEARCH_LOOP_STAGES: [&str; 8] = [
     "optional_gap_acquisition",
     "optional_gap_extraction",
     "report_document_generation",
+    "report_editorial_planning",
     "deterministic_publication",
 ];
 
-const DEEP_RESEARCH_LOOP_CARDINALITY: [&str; 5] = [
+const DEEP_RESEARCH_LOOP_CARDINALITY: [&str; 6] = [
     "outline_generations",
     "initial_extractions",
     "gap_extractions",
     "report_generations",
+    "editorial_generations",
     "report_repairs",
 ];
 
@@ -34,14 +36,21 @@ const SEMANTIC_OUTLINE_FIELDS: [&str; 7] = [
     "supplemental_queries",
     "stop_conditions",
 ];
-const TRACK_IDENTITY_FIELDS: [&str; 6] = [
+const TRACK_IDENTITY_FIELDS: [&str; 7] = [
     "id",
     "title",
     "focus",
     "material",
     "completion_criteria",
+    "questions",
     "evidence_requirements",
 ];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedPlanQuestion {
+    prompt: String,
+    completion_criterion_indexes: Option<Vec<usize>>,
+}
 
 pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Value>, String> {
     let contract = workflow_args
@@ -140,6 +149,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         ("initial_extractions", 1),
         ("gap_extractions", 1),
         ("report_generations", 1),
+        ("editorial_generations", 1),
         ("report_repairs", 1),
     ] {
         if cardinality.get(field).and_then(Value::as_u64) != Some(expected) {
@@ -205,16 +215,15 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         .get("output_schema")
         .and_then(|schema| schema.pointer("/properties/supplemental_queries/maxItems"))
         .and_then(Value::as_u64)
-        .filter(|maximum| *maximum <= 3)
+        .filter(|maximum| *maximum <= MAX_PLANNER_SUPPLEMENTAL_QUERIES as u64)
         .ok_or_else(|| {
             "DeepResearch planner output schema omitted a bounded supplemental-query maximum"
                 .to_string()
         })?;
-    if schema_max_supplemental_queries != 3 {
-        return Err(
-            "DeepResearch planner schema must allow exactly three supplemental queries"
-                .to_string(),
-        );
+    if schema_max_supplemental_queries != MAX_PLANNER_SUPPLEMENTAL_QUERIES as u64 {
+        return Err(format!(
+            "DeepResearch planner schema must allow exactly {MAX_PLANNER_SUPPLEMENTAL_QUERIES} supplemental queries"
+        ));
     }
     if planner.get("max_steps").and_then(Value::as_u64) != Some(1) {
         return Err(
@@ -253,9 +262,12 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         );
     }
     for (field, expected) in [
-        ("max_searches", 4),
-        ("max_fetches", 8),
-        ("max_supplemental_fetches", 2),
+        ("max_searches", MAX_PLANNER_SEARCHES),
+        ("max_fetches", MAX_PLANNER_INITIAL_FETCHES),
+        (
+            "max_supplemental_fetches",
+            MAX_PLANNER_SUPPLEMENTAL_FETCHES,
+        ),
         ("retrieval_timeout_ms", 150_000),
     ] {
         if hard_caps.get(field).and_then(Value::as_u64) != Some(expected) {
@@ -293,13 +305,13 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
         .ok_or_else(|| "DeepResearch outline planner returned a non-object fragment".to_string())?;
     reject_unknown_fields(object, &SEMANTIC_OUTLINE_FIELDS, "semantic outline")?;
     required_text(object, "report_title")?;
-    required_research_scope(object, "semantic outline")?;
+    let research_scope = required_research_scope(object, "semantic outline")?;
     required_bool(object, "freshness_required", "semantic outline")?;
     required_bool(object, "workspace_evidence_required", "semantic outline")?;
     exact_string_array(
         object.get("supplemental_queries"),
         "supplemental_queries",
-        3,
+        MAX_PLANNER_SUPPLEMENTAL_QUERIES,
     )?;
     let stop_conditions = string_array(
         object.get("stop_conditions"),
@@ -344,11 +356,17 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
         let completion_criteria = string_array(
             track.get("completion_criteria"),
             "outline track completion_criteria",
-            2,
+            MAX_PLANNER_COMPLETION_CRITERIA,
         )?;
         if completion_criteria.is_empty() {
             return Err("DeepResearch outline track has no completion criterion".to_string());
         }
+        validated_plan_questions(
+            track.get("questions"),
+            "outline track questions",
+            completion_criteria.len(),
+            true,
+        )?;
         let evidence_requirements = track
             .get("evidence_requirements")
             .and_then(Value::as_object)
@@ -377,6 +395,7 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
     if !material {
         return Err("DeepResearch semantic outline has no material track".to_string());
     }
+    validate_structured_plan_question_roles(tracks, research_scope)?;
     Ok(tracks.clone())
 }
 
@@ -401,10 +420,14 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
         "plan",
     )?;
     required_text(object, "report_title")?;
-    required_research_scope(object, "plan")?;
+    let research_scope = required_research_scope(object, "plan")?;
     required_bool(object, "freshness_required", "plan")?;
     required_bool(object, "workspace_evidence_required", "plan")?;
-    let _search_queries = exact_string_array(object.get("search_queries"), "search_queries", 4)?;
+    let _search_queries = exact_string_array(
+        object.get("search_queries"),
+        "search_queries",
+        MAX_PLANNER_SEARCHES as usize,
+    )?;
     let _seed_urls = string_array(object.get("seed_urls"), "seed_urls", 3)?;
     let budget = object
         .get("budget")
@@ -422,8 +445,20 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
         150_000,
         "retrieval budget",
     )?;
-    required_integer_in_range(budget, "direct_searches", 0, 4, "retrieval budget")?;
-    required_integer_in_range(budget, "direct_fetches", 0, 8, "retrieval budget")?;
+    required_integer_in_range(
+        budget,
+        "direct_searches",
+        0,
+        MAX_PLANNER_SEARCHES,
+        "retrieval budget",
+    )?;
+    required_integer_in_range(
+        budget,
+        "direct_fetches",
+        0,
+        MAX_PLANNER_INITIAL_FETCHES,
+        "retrieval budget",
+    )?;
     let (obligations, _) = research_contract_from_plan(&value)?;
     let tracks = object
         .get("tracks")
@@ -454,15 +489,20 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
             "track",
         )?;
         required_bool(track, "material", "track")?;
-        let questions = string_array(track.get("questions"), "track questions", 2)?;
-        if questions.is_empty() {
-            return Err("DeepResearch track has no research question".to_string());
-        }
         let completion_criteria = string_array(
             track.get("completion_criteria"),
             "track completion_criteria",
-            2,
+            MAX_PLANNER_COMPLETION_CRITERIA,
         )?;
+        let questions = validated_plan_questions(
+            track.get("questions"),
+            "track questions",
+            completion_criteria.len(),
+            false,
+        )?;
+        if questions.is_empty() {
+            return Err("DeepResearch track has no research question".to_string());
+        }
         if completion_criteria.is_empty() {
             return Err("DeepResearch track has no completion criterion".to_string());
         }
@@ -481,8 +521,228 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
             "track evidence requirements",
         )?;
     }
+    validate_structured_plan_question_roles(tracks, research_scope)?;
     debug_assert!(obligations.iter().any(|obligation| obligation.material));
     Ok(PlannedInquiry { value })
+}
+
+fn validated_plan_questions(
+    value: Option<&Value>,
+    resource: &str,
+    completion_criterion_count: usize,
+    structured_required: bool,
+) -> Result<Vec<ValidatedPlanQuestion>, String> {
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("DeepResearch plan {resource} is not an array"))?;
+    if values.is_empty() || values.len() > MAX_PLANNER_QUESTIONS_PER_TRACK {
+        return Err(format!(
+            "DeepResearch plan {resource} must contain between 1 and {MAX_PLANNER_QUESTIONS_PER_TRACK} items"
+        ));
+    }
+    if completion_criterion_count == 0 {
+        return Err(format!(
+            "DeepResearch plan {resource} cannot map questions without completion criteria"
+        ));
+    }
+
+    let contains_strings = values.iter().any(Value::is_string);
+    let contains_objects = values.iter().any(Value::is_object);
+    if values
+        .iter()
+        .any(|value| !value.is_string() && !value.is_object())
+        || (contains_strings && contains_objects)
+    {
+        return Err(format!(
+            "DeepResearch plan {resource} must contain either legacy strings or structured question objects"
+        ));
+    }
+    if structured_required && contains_strings {
+        return Err(format!(
+            "DeepResearch semantic planner {resource} must use structured question objects"
+        ));
+    }
+
+    if contains_strings {
+        return values
+            .iter()
+            .map(|value| {
+                let prompt = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|prompt| !prompt.is_empty())
+                    .filter(|prompt| prompt.chars().count() <= 240)
+                    .ok_or_else(|| {
+                        format!(
+                            "DeepResearch plan {resource} contains an invalid legacy question"
+                        )
+                    })?;
+                Ok(ValidatedPlanQuestion {
+                    prompt: prompt.to_string(),
+                    completion_criterion_indexes: None,
+                })
+            })
+            .collect();
+    }
+
+    let mut covered_criteria = BTreeSet::new();
+    let questions = values
+        .iter()
+        .map(|value| {
+            let question = value.as_object().ok_or_else(|| {
+                format!("DeepResearch plan {resource} contains a non-object question")
+            })?;
+            reject_unknown_fields(
+                question,
+                &["question", "role", "completion_criterion_indexes"],
+                resource,
+            )?;
+            let prompt = required_text(question, "question")?;
+            if prompt.chars().count() > 240 || prompt.chars().any(char::is_control) {
+                return Err(format!(
+                    "DeepResearch plan {resource} contains an invalid question prompt"
+                ));
+            }
+            question
+                .get("role")
+                .and_then(Value::as_str)
+                .filter(|role| {
+                    matches!(
+                        *role,
+                        "establish" | "compare" | "explain" | "challenge" | "decide"
+                    )
+                })
+                .ok_or_else(|| {
+                    format!("DeepResearch plan {resource} contains an unsupported question role")
+                })?;
+            let raw_indexes = question
+                .get("completion_criterion_indexes")
+                .and_then(Value::as_array)
+                .filter(|indexes| !indexes.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "DeepResearch plan {resource} question omitted completion-criterion indexes"
+                    )
+                })?;
+            if raw_indexes.len() > completion_criterion_count {
+                return Err(format!(
+                    "DeepResearch plan {resource} question maps too many completion criteria"
+                ));
+            }
+            let mut indexes = Vec::with_capacity(raw_indexes.len());
+            for raw_index in raw_indexes {
+                let index = raw_index.as_u64().and_then(|index| usize::try_from(index).ok())
+                    .filter(|index| *index < completion_criterion_count)
+                    .ok_or_else(|| {
+                        format!(
+                            "DeepResearch plan {resource} question contains an invalid completion-criterion index"
+                        )
+                    })?;
+                if indexes.contains(&index) {
+                    return Err(format!(
+                        "DeepResearch plan {resource} question repeats a completion-criterion index"
+                    ));
+                }
+                indexes.push(index);
+                covered_criteria.insert(index);
+            }
+            Ok(ValidatedPlanQuestion {
+                prompt: prompt.to_string(),
+                completion_criterion_indexes: Some(indexes),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    if covered_criteria.len() != completion_criterion_count {
+        return Err(format!(
+            "DeepResearch plan {resource} does not cover every completion criterion"
+        ));
+    }
+    Ok(questions)
+}
+
+fn validate_structured_plan_question_roles(
+    tracks: &[Value],
+    research_scope: &str,
+) -> Result<(), String> {
+    let mut roles = BTreeSet::new();
+    for track in tracks {
+        let Some(questions) = track.get("questions").and_then(Value::as_array) else {
+            continue;
+        };
+        if questions.iter().any(Value::is_string) {
+            // Host fallback plans retain their legacy string questions. Their
+            // generic shape is validated separately and must not pretend to
+            // carry model-authored analytical roles.
+            return Ok(());
+        }
+        roles.extend(
+            questions
+                .iter()
+                .filter_map(|question| question.get("role").and_then(Value::as_str))
+                .map(str::to_string),
+        );
+    }
+    match research_scope {
+        "focused" if !roles.contains("establish") => Err(
+            "DeepResearch focused plans require at least one `establish` question".to_string(),
+        ),
+        "comprehensive"
+            if !roles.contains("establish")
+                || !roles.contains("challenge")
+                || !(roles.contains("compare") || roles.contains("explain")) =>
+        {
+            Err(
+                "DeepResearch comprehensive plans must cover `establish`, `challenge`, and `compare` or `explain` across their tracks"
+                    .to_string(),
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod plan_question_role_tests {
+    use super::*;
+
+    #[test]
+    fn comprehensive_role_mix_is_validated_across_tracks() {
+        let tracks = serde_json::json!([{
+            "questions": [
+                { "role": "establish" },
+                { "role": "compare" },
+                { "role": "challenge" }
+            ]
+        }, {
+            "questions": [
+                { "role": "establish" },
+                { "role": "explain" },
+                { "role": "decide" }
+            ]
+        }]);
+
+        validate_structured_plan_question_roles(tracks.as_array().unwrap(), "comprehensive")
+            .expect("the plan-wide role mix should admit a decision track without challenge");
+    }
+
+    #[test]
+    fn comprehensive_plan_still_requires_a_global_challenge() {
+        let tracks = serde_json::json!([{
+            "questions": [
+                { "role": "establish" },
+                { "role": "compare" },
+                { "role": "decide" }
+            ]
+        }]);
+
+        let error = validate_structured_plan_question_roles(
+            tracks.as_array().unwrap(),
+            "comprehensive",
+        )
+        .expect_err("a comprehensive plan without any challenge must fail");
+
+        assert!(error.contains("across their tracks"));
+    }
 }
 
 fn reject_unknown_fields(
@@ -596,7 +856,7 @@ pub fn research_contract_from_plan(
         let completion_criteria = string_array(
             track.get("completion_criteria"),
             "track completion_criteria",
-            2,
+            MAX_PLANNER_COMPLETION_CRITERIA,
         )?;
         if completion_criteria.is_empty() {
             return Err(format!(

@@ -1,7 +1,34 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub struct ResearchReportArtifacts {
     pub markdown: PathBuf,
     pub html: PathBuf,
+}
+
+pub fn validate_deep_research_run_id(run_id: &str) -> Result<(), String> {
+    let run_id = run_id.trim();
+    if run_id.is_empty()
+        || run_id.len() > 128
+        || !run_id
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err("DeepResearch run ID must be a bounded ASCII path-safe identifier".to_string());
+    }
+    Ok(())
+}
+
+pub fn deep_research_run_artifact_relative_directory(
+    run_id: &str,
+) -> Result<PathBuf, String> {
+    validate_deep_research_run_id(run_id)?;
+    Ok(PathBuf::from(".a3s")
+        .join("research")
+        .join("artifacts")
+        .join(run_id))
 }
 
 fn ensure_plain_directory(path: &Path) -> Result<(), String> {
@@ -62,6 +89,46 @@ fn prepare_research_report_directory(
         return Err("DeepResearch report directory escaped the workspace".to_string());
     }
     Ok((root, canonical_report))
+}
+
+fn prepare_research_run_report_directory(
+    workspace: &Path,
+    run_id: &str,
+) -> Result<(PathBuf, PathBuf, String), String> {
+    let relative_dir = deep_research_run_artifact_relative_directory(run_id)?;
+    let root = workspace.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve workspace {}: {error}",
+            workspace.display()
+        )
+    })?;
+    let a3s_dir = root.join(".a3s");
+    ensure_plain_directory(&a3s_dir)?;
+    let research_dir = a3s_dir.join("research");
+    ensure_plain_directory(&research_dir)?;
+    let artifacts_dir = research_dir.join("artifacts");
+    ensure_plain_directory(&artifacts_dir)?;
+    let report_dir = artifacts_dir.join(run_id);
+    ensure_plain_directory(&report_dir)?;
+
+    let canonical_research = research_dir
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", research_dir.display()))?;
+    let canonical_artifacts = artifacts_dir
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", artifacts_dir.display()))?;
+    let canonical_report = report_dir
+        .canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", report_dir.display()))?;
+    if canonical_research.parent() != Some(a3s_dir.as_path())
+        || canonical_artifacts.parent() != Some(canonical_research.as_path())
+        || canonical_report.parent() != Some(canonical_artifacts.as_path())
+        || !canonical_report.starts_with(&root)
+    {
+        return Err("DeepResearch run artifact directory escaped the workspace".to_string());
+    }
+    let relative_html = relative_dir.join("index.html").to_string_lossy().replace('\\', "/");
+    Ok((root, canonical_report, relative_html))
 }
 
 fn validate_research_report_file_target(path: &Path) -> Result<(), String> {

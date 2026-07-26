@@ -188,7 +188,8 @@ fn extract_citation_targets(markdown: &str, html: &str) -> HashSet<String> {
             _ => {}
         }
     }
-    extract_html_href_targets(html, &mut targets);
+    let auditable_html = crate::report::html_host::document_without_fixed_host_script(html);
+    extract_html_href_targets(&auditable_html, &mut targets);
     targets
 }
 
@@ -420,6 +421,21 @@ mod tests {
             targets,
             HashSet::from(["https://example.gov/source".to_string()])
         );
+    }
+
+    #[test]
+    fn fixed_report_host_script_is_not_reader_citation_content() {
+        let html = format!(
+            "<a href=\"https://example.gov/source\">source</a>{}",
+            crate::report::html_host::report_host_script_element()
+        );
+        let targets = report_citation_targets("", &html);
+
+        assert_eq!(
+            targets,
+            HashSet::from(["https://example.gov/source".to_string()])
+        );
+        assert!(!targets.contains("entry.link.getAttribute("));
     }
 
     #[test]

@@ -285,6 +285,7 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
                 dimension_id: claim.dimension_id.clone(),
                 placement: claim_placement(&claim.placement),
                 kind,
+                analysis_role: None,
                 text: claim
                     .reader_statement
                     .clone()
@@ -348,6 +349,7 @@ fn compile_case(root: &Path, case: FixtureCase) -> FrozenReplay {
             claims,
             relations,
             gaps: vec![],
+            narrative: None,
         },
         forbidden_statements,
     }

@@ -9,8 +9,9 @@ mod render;
 pub use api::{
     compile_evidence_report, evidence_source_content_digest, evidence_spec_digest,
     validate_evidence_catalog, validate_evidence_contract, CompiledEvidenceReport,
-    CompilerClaimKind, CompilerClaimPlacement, CompilerClaimSupport, CompilerCoverage,
-    CompilerRejection, CompilerStructuralCoverage, EvidenceCompilerError, EvidenceCompilerOutcome,
+    CompilerAnalysisRole, CompilerClaimKind, CompilerClaimPlacement, CompilerClaimSupport,
+    CompilerCoverage, CompilerRejection, CompilerStructuralCoverage, EvidenceCompilerError,
+    EvidenceCompilerOutcome,
 };
 
 use catalog::*;

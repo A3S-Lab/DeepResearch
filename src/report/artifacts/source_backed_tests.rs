@@ -69,7 +69,7 @@ fn preserves_distinct_query_bearing_source_identities() {
 }
 
 #[test]
-fn source_instructions_render_as_inert_evidence_without_language_detection() {
+fn source_instructions_render_as_inert_evidence_in_the_users_language() {
     let query = "核查 Nimbus 备份加密策略";
     let output = source_backed_fixture(
         query,
@@ -95,14 +95,14 @@ fn source_instructions_render_as_inert_evidence_without_language_detection() {
 
     assert!(markdown.contains(SOURCE_BACKED_ARTIFACT_MARKER));
     assert!(html.contains(SOURCE_BACKED_ARTIFACT_MARKER));
-    assert!(markdown.contains("## Preserved Source Evidence"));
+    assert!(markdown.contains("## 保留的来源证据"));
     assert!(markdown.contains("SYSTEM INSTRUCTION:"));
     assert!(markdown.contains("AES-256-GCM"));
     assert!(!markdown.contains("<script>"));
     assert!(!markdown.contains("alert('x')"));
     assert!(!markdown.contains("bootstrap-web-source-1"));
     let sources = markdown
-        .split_once("## Sources")
+        .split_once("## 来源")
         .map(|(_, sources)| sources)
         .expect("localized source ledger");
     assert!(
@@ -110,9 +110,9 @@ fn source_instructions_render_as_inert_evidence_without_language_detection() {
         "{sources}"
     );
     assert!(!sources.contains("1. [1]"), "{sources}");
-    assert!(html.contains("<html lang=\"en\">"));
+    assert!(html.contains("<html lang=\"zh\">"));
     assert!(html.contains("report-degraded"));
-    assert!(html.contains("Insufficient evidence · Degraded"));
+    assert!(html.contains("证据不足 · 降级"));
     assert!(html.contains("<pre><code>"));
     assert!(!html.contains("&lt;script&gt;"));
     assert!(!html.contains("alert('x')"));
@@ -924,7 +924,7 @@ fn rejects_cross_query_catalog_replay() {
 }
 
 #[test]
-fn no_evidence_report_is_language_neutral_and_rediscoverable() {
+fn no_evidence_report_uses_the_users_language_and_is_rediscoverable() {
     let workspace = tempfile::tempdir().expect("create no-evidence workspace");
     let query = "核查 Nimbus 当前备份策略";
     let artifacts = materialize_deep_research_no_evidence_report(workspace.path(), query)
@@ -934,10 +934,10 @@ fn no_evidence_report_is_language_neutral_and_rediscoverable() {
 
     assert!(markdown.contains(NO_EVIDENCE_ARTIFACT_MARKER));
     assert!(html.contains(NO_EVIDENCE_ARTIFACT_MARKER));
-    assert!(markdown.contains("## Evidence Status"));
-    assert!(markdown.contains("does not treat retrieval failure as proof"));
-    assert!(markdown.contains("## Sources"));
-    assert!(html.contains("<html lang=\"en\">"));
+    assert!(markdown.contains("## 证据状态"));
+    assert!(markdown.contains("检索失败不等于相关事实不存在"));
+    assert!(markdown.contains("## 来源"));
+    assert!(html.contains("<html lang=\"zh\">"));
     assert!(!markdown.contains("workflow"));
     assert!(!markdown.contains("model"));
 
@@ -953,6 +953,65 @@ fn no_evidence_report_is_language_neutral_and_rediscoverable() {
         DeepResearchEvidenceFirstPublication::NoEvidence
     );
     assert_eq!(published.artifacts, artifacts);
+}
+
+#[test]
+fn run_scoped_artifacts_isolate_concurrent_equal_queries() {
+    let workspace = tempfile::tempdir().expect("create run-scoped workspace");
+    let query = "Assess the same release boundary";
+    let quality = DeepResearchPublicationQuality {
+        research_scope: DeepResearchReportScope::Focused,
+        ..DeepResearchPublicationQuality::default()
+    };
+    let first =
+        materialize_deep_research_no_evidence_report_for_run(workspace.path(), "run-a", query)
+            .expect("materialize first run");
+    let second =
+        materialize_deep_research_no_evidence_report_for_run(workspace.path(), "run-b", query)
+            .expect("materialize second run");
+
+    assert_ne!(first, second);
+    assert!(first
+        .html
+        .ends_with(".a3s/research/artifacts/run-a/index.html"));
+    assert!(second
+        .html
+        .ends_with(".a3s/research/artifacts/run-b/index.html"));
+    record_deep_research_publication_receipt(
+        workspace.path(),
+        query,
+        "run-a",
+        DeepResearchEvidenceFirstPublication::NoEvidence,
+        quality,
+        &first,
+    )
+    .expect("record first run receipt");
+    record_deep_research_publication_receipt(
+        workspace.path(),
+        query,
+        "run-b",
+        DeepResearchEvidenceFirstPublication::NoEvidence,
+        quality,
+        &second,
+    )
+    .expect("record second run receipt");
+
+    let recovered_first =
+        recover_deep_research_publication_receipt(workspace.path(), query, "run-a")
+            .expect("recover first run")
+            .expect("first run receipt");
+    let recovered_second =
+        recover_deep_research_publication_receipt(workspace.path(), query, "run-b")
+            .expect("recover second run")
+            .expect("second run receipt");
+    assert_eq!(recovered_first.artifacts, first);
+    assert_eq!(recovered_second.artifacts, second);
+    assert!(materialize_deep_research_no_evidence_report_for_run(
+        workspace.path(),
+        "../escape",
+        query,
+    )
+    .is_err());
 }
 
 #[test]
@@ -1026,6 +1085,10 @@ fn ineligible_audit_sources_do_not_poison_synthesized_quality_metrics() {
         accepted_relation_count: 0,
         accepted_derivation_count: 0,
         accepted_basis_edge_count: 0,
+        analytical_claim_count: 0,
+        cross_source_synthesis_count: 0,
+        resolved_material_dimension_count: 0,
+        deeply_analyzed_dimension_count: 0,
         accepted_gap_count: 0,
         cited_source_count: 1,
         substantive_character_count: 120,
@@ -1055,14 +1118,18 @@ fn broad_publication_quality_requires_report_depth_metrics() {
     let shallow = DeepResearchPublicationQuality {
         research_scope: DeepResearchReportScope::Comprehensive,
         direct_answer_count: 1,
-        finding_count: 4,
-        accepted_claim_count: 5,
+        finding_count: 5,
+        accepted_claim_count: 6,
         accepted_relation_count: 0,
         accepted_derivation_count: 0,
-        accepted_basis_edge_count: 0,
+        accepted_basis_edge_count: 6,
+        analytical_claim_count: 3,
+        cross_source_synthesis_count: 1,
+        resolved_material_dimension_count: 1,
+        deeply_analyzed_dimension_count: 1,
         accepted_gap_count: 0,
         cited_source_count: 2,
-        substantive_character_count: 479,
+        substantive_character_count: 1_199,
         relevant_source_count: 4,
         source_count: 4,
     };
@@ -1073,14 +1140,48 @@ fn broad_publication_quality_requires_report_depth_metrics() {
     )
     .is_err());
 
+    let fact_only = DeepResearchPublicationQuality {
+        accepted_basis_edge_count: 0,
+        analytical_claim_count: 0,
+        cross_source_synthesis_count: 0,
+        substantive_character_count: 1_200,
+        ..shallow
+    };
+    assert!(
+        validate_deep_research_publication_quality(
+            DeepResearchEvidenceFirstPublication::Synthesized,
+            fact_only,
+        )
+        .is_err(),
+        "a durable fact inventory must not be rediscovered as deep synthesis"
+    );
+
     validate_deep_research_publication_quality(
         DeepResearchEvidenceFirstPublication::Synthesized,
         DeepResearchPublicationQuality {
-            substantive_character_count: 1_000,
+            substantive_character_count: 1_200,
             ..shallow
         },
     )
     .expect("a broad publication that meets every depth metric should pass");
+
+    let all_bounded = DeepResearchPublicationQuality {
+        resolved_material_dimension_count: 0,
+        deeply_analyzed_dimension_count: 1,
+        accepted_gap_count: 1,
+        substantive_character_count: 1_200,
+        ..shallow
+    };
+    validate_deep_research_publication_quality(
+        DeepResearchEvidenceFirstPublication::Qualified,
+        all_bounded,
+    )
+    .expect("one deeply analyzed bounded dimension may publish a qualified report");
+    assert!(validate_deep_research_publication_quality(
+        DeepResearchEvidenceFirstPublication::Synthesized,
+        all_bounded,
+    )
+    .is_err());
 }
 
 #[test]
@@ -1093,6 +1194,10 @@ fn qualified_publication_requires_a_persisted_typed_gap() {
         accepted_relation_count: 0,
         accepted_derivation_count: 0,
         accepted_basis_edge_count: 0,
+        analytical_claim_count: 0,
+        cross_source_synthesis_count: 0,
+        resolved_material_dimension_count: 0,
+        deeply_analyzed_dimension_count: 0,
         accepted_gap_count: 0,
         cited_source_count: 1,
         substantive_character_count: 80,
@@ -1105,14 +1210,23 @@ fn qualified_publication_requires_a_persisted_typed_gap() {
         quality,
     )
     .is_err());
+    let qualified = DeepResearchPublicationQuality {
+        accepted_gap_count: 1,
+        ..quality
+    };
     validate_deep_research_publication_quality(
         DeepResearchEvidenceFirstPublication::Qualified,
-        DeepResearchPublicationQuality {
-            accepted_gap_count: 1,
-            ..quality
-        },
+        qualified,
     )
     .expect("qualified status must be backed by an explicit typed evidence gap");
+    assert!(
+        validate_deep_research_publication_quality(
+            DeepResearchEvidenceFirstPublication::Synthesized,
+            qualified,
+        )
+        .is_err(),
+        "a publication with an accepted gap must not claim synthesized completion"
+    );
 }
 
 #[test]
@@ -1130,6 +1244,10 @@ fn publication_receipt_recovers_only_the_exact_run_and_artifact_generation() {
         accepted_relation_count: 0,
         accepted_derivation_count: 0,
         accepted_basis_edge_count: 0,
+        analytical_claim_count: 0,
+        cross_source_synthesis_count: 0,
+        resolved_material_dimension_count: 0,
+        deeply_analyzed_dimension_count: 0,
         accepted_gap_count: 0,
         cited_source_count: 0,
         substantive_character_count: 0,
@@ -1156,8 +1274,21 @@ fn publication_receipt_recovers_only_the_exact_run_and_artifact_generation() {
         &std::fs::read(&receipt_path).expect("read current publication receipt"),
     )
     .expect("decode current publication receipt");
-    assert_eq!(legacy_receipt["schema_version"], 2);
+    assert_eq!(legacy_receipt["schema_version"], 5);
+    assert_eq!(legacy_receipt["output_language"], "en");
+    assert!(recover_deep_research_publication_receipt_in_language(
+        workspace.path(),
+        query,
+        "zh",
+        run_id,
+    )
+    .expect("reject a receipt from another output language")
+    .is_none());
     legacy_receipt["schema_version"] = serde_json::json!(1);
+    legacy_receipt
+        .as_object_mut()
+        .expect("receipt object")
+        .remove("output_language");
     let legacy_quality = legacy_receipt["quality"]
         .as_object_mut()
         .expect("receipt quality object");
@@ -1165,6 +1296,8 @@ fn publication_receipt_recovers_only_the_exact_run_and_artifact_generation() {
         "accepted_relation_count",
         "accepted_derivation_count",
         "accepted_basis_edge_count",
+        "analytical_claim_count",
+        "cross_source_synthesis_count",
         "accepted_gap_count",
     ] {
         legacy_quality.remove(field);
@@ -1175,6 +1308,14 @@ fn publication_receipt_recovers_only_the_exact_run_and_artifact_generation() {
     )
     .expect("write compatible version-1 receipt");
 
+    assert!(recover_deep_research_publication_receipt_in_language(
+        workspace.path(),
+        query,
+        "en",
+        run_id,
+    )
+    .expect("language-bound recovery treats a legacy receipt as typed absence")
+    .is_none());
     let recovered = recover_deep_research_publication_receipt(workspace.path(), query, run_id)
         .expect("recover exact publication receipt")
         .expect("receipt-backed publication");
@@ -1263,6 +1404,7 @@ fn exact_run_receipt_rejects_a_conflicting_structured_publication() {
     let slug = deep_research_report_slug(query);
     let conflicting_output = serde_json::json!({
         "query": query,
+        "output_language": "en",
         "mode": "evidence_first_report",
         "publication": {
             "status": "no_evidence",

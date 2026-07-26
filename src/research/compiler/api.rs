@@ -54,12 +54,26 @@ pub enum CompilerClaimKind {
     Recommendation,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilerAnalysisRole {
+    Conclusion,
+    Evidence,
+    Comparison,
+    Explanation,
+    Challenge,
+    Implication,
+    Boundary,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CompilerClaimSupport {
     pub claim_id: String,
     pub dimension_id: String,
     pub placement: CompilerClaimPlacement,
     pub kind: CompilerClaimKind,
+    pub analysis_role: Option<CompilerAnalysisRole>,
+    pub substantive_character_count: usize,
     pub source_ids: Vec<String>,
     pub basis_claim_ids: Vec<String>,
     pub derivation_method: Option<String>,
@@ -315,6 +329,20 @@ fn document_claim_support(document: &ReportDocument) -> Vec<CompilerClaimSupport
                 super::ClaimKind::Inference => CompilerClaimKind::Inference,
                 super::ClaimKind::Recommendation => CompilerClaimKind::Recommendation,
             },
+            analysis_role: claim.analysis_role.map(|role| match role {
+                super::ClaimAnalysisRole::Conclusion => CompilerAnalysisRole::Conclusion,
+                super::ClaimAnalysisRole::Evidence => CompilerAnalysisRole::Evidence,
+                super::ClaimAnalysisRole::Comparison => CompilerAnalysisRole::Comparison,
+                super::ClaimAnalysisRole::Explanation => CompilerAnalysisRole::Explanation,
+                super::ClaimAnalysisRole::Challenge => CompilerAnalysisRole::Challenge,
+                super::ClaimAnalysisRole::Implication => CompilerAnalysisRole::Implication,
+                super::ClaimAnalysisRole::Boundary => CompilerAnalysisRole::Boundary,
+            }),
+            substantive_character_count: claim
+                .text
+                .chars()
+                .filter(|character| !character.is_whitespace() && !character.is_control())
+                .count(),
             source_ids: claim
                 .citation_numbers
                 .iter()

@@ -282,16 +282,11 @@ pub fn validate_report_obligation_coverage(
         }
         if coverage.finding.trim().chars().count() < 8
             || coverage.interpretation.trim().chars().count() < 8
+            || coverage.implication.trim().chars().count() < 8
+            || coverage.uncertainty.trim().chars().count() < 8
         {
             return Err(format!(
-                "content rejected: research obligation `{obligation_id}` lacks a finding or interpretation"
-            ));
-        }
-        if matches!(coverage.status, ReportTrackStatus::Bounded)
-            && coverage.uncertainty.trim().is_empty()
-        {
-            return Err(format!(
-                "content rejected: bounded research obligation `{obligation_id}` does not state its uncertainty"
+                "content rejected: research obligation `{obligation_id}` lacks a substantive finding, interpretation, implication, or uncertainty boundary"
             ));
         }
     }
@@ -418,8 +413,18 @@ pub fn deep_research_report_frame_schema() -> serde_json::Value {
                                 "status": { "type": "string", "enum": ["answered", "bounded"] },
                                 "finding": { "type": "string", "minLength": 8, "maxLength": 600 },
                                 "interpretation": { "type": "string", "minLength": 8, "maxLength": 600 },
-                                "implication": { "type": "string", "maxLength": 600 },
-                                "uncertainty": { "type": "string", "maxLength": 600 }
+                                "implication": {
+                                    "type": "string",
+                                    "minLength": 8,
+                                    "maxLength": 600,
+                                    "description": "Explain what the finding changes for the reader's judgment, action, or decision boundary."
+                                },
+                                "uncertainty": {
+                                    "type": "string",
+                                    "minLength": 8,
+                                    "maxLength": 600,
+                                    "description": "State an applicability boundary, counterexample, unresolved alternative, or condition that would change the conclusion."
+                                }
                             },
                             "required": ["obligation_id", "status", "finding", "interpretation", "implication", "uncertainty"]
                         }

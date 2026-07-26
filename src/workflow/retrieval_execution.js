@@ -158,6 +158,7 @@
           query,
           plan,
           max_steps: input.local_max_steps,
+          source_hints: input.workspace_source_hints,
         },
         retry: retrievalRetry,
       };
@@ -246,9 +247,10 @@
   }
   const bootstrapAcquisition = object(input.bootstrap_acquisition);
   const bootstrapPacket = object(bootstrapAcquisition.packet);
-  const hasBootstrapWeb = needsWeb &&
+  const hasBootstrapPacket =
     Array.isArray(bootstrapPacket.sources) &&
     bootstrapPacket.sources.length > 0;
+  const hasBootstrapWeb = needsWeb && hasBootstrapPacket;
   const plannedQueryCount = Array.isArray(plan.search_queries)
     ? plan.search_queries.length
     : 0;
@@ -356,12 +358,13 @@
         query,
         plan,
         max_steps: input.local_max_steps,
+        source_hints: input.workspace_source_hints,
       },
       retry: retrievalRetry,
     };
   }
 
-  const bootstrapRetrieval = hasBootstrapWeb
+  const bootstrapRetrieval = hasBootstrapPacket
     ? {
         status: String(bootstrapAcquisition.status || "partial"),
         packet: bootstrapPacket,
@@ -427,8 +430,42 @@
       };
     }
   }
+  const selectorShardRecoveries = usesSelectorShards
+    ? selectorShardRecoveryEntries(
+        selectorShards,
+        failures,
+        STEP_SELECT_SHARD_PREFIX,
+        STEP_SELECT_SHARD_RECOVERY_PREFIX
+      )
+    : [];
+  if (selectorShardRecoveries.length > 0) {
+    const pendingRecoverySteps = selectorShardRecoveries
+      .map((entry) => ({
+        step_id: entry.step_id,
+        step_name: "generate_object",
+        input: selectorInput(entry.packet, { shard: true }),
+        retry: semanticShardSelectionRetry,
+      }))
+      .filter((step) =>
+        !outputs[step.step_id] && !failures[step.step_id]
+      );
+    if (pendingRecoverySteps.length > 0) {
+      return {
+        type: "schedule_steps",
+        steps: pendingRecoverySteps,
+      };
+    }
+  }
+  const selectorReductionEntries = usesSelectorShards
+    ? selectorShardReductionEntries(
+        selectorShards,
+        failures,
+        STEP_SELECT_SHARD_PREFIX,
+        selectorShardRecoveries
+      )
+    : [];
   const shardReduction = usesSelectorShards
-    ? reducedSelectorPacket(packet, selectorShards, outputs, failures)
+    ? reducedSelectorPacket(packet, selectorReductionEntries, outputs, failures)
     : {
         packet,
         candidate_count: admission.chunk_count,
@@ -532,6 +569,8 @@
       semantic_selection_shard_count: usesSelectorShards
         ? selectorShards.length
         : 1,
+      semantic_selection_recovery_shard_count:
+        selectorShardRecoveries.length,
       semantic_selection_candidate_count: shardReduction.candidate_count,
       semantic_selection_failed_shard_count:
         shardReduction.failed_shard_count || 0,
@@ -539,7 +578,7 @@
       semantic_selection_failed_source_reduction_count:
         sourceReduction.failed_source_reduction_count || 0,
       semantic_selection_materialized_count: sourceReduction.candidate_count,
-      bootstrap_source_count: hasBootstrapWeb
+      bootstrap_source_count: hasBootstrapPacket
         ? bootstrapPacket.sources.length
         : 0,
       bootstrap: bootstrapRetrieval

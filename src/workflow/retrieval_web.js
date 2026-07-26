@@ -74,7 +74,12 @@
   const discoverWeb = async (stepInput) => {
     const plan = object(stepInput.plan);
     const budget = object(plan.budget);
-    const searchLimit = clamp(budget.direct_searches, 0, 4, 2);
+    const searchLimit = clamp(
+      budget.direct_searches,
+      0,
+      MAX_SEARCH_QUERIES,
+      2
+    );
     const fetchLimit = clamp(budget.direct_fetches, 0, MAX_SOURCES, 4);
     const searchTimeout = clamp(stepInput.search_timeout_secs, 1, 60, 12);
     const plannerQueries = Array.isArray(plan.search_queries)
@@ -110,7 +115,7 @@
     );
     const seeds = uniqueStrings(Array.isArray(plan.seed_urls)
       ? plan.seed_urls.map(cleanUrl).filter(Boolean)
-      : []);
+      : []).slice(0, MAX_SEED_URLS);
     const errors = [];
     const searchGroups = [];
     const searchEngines = [];
@@ -123,7 +128,7 @@
         args: {
           query,
           format: "json",
-          limit: 16,
+          limit: MAX_RESULTS_PER_SEARCH,
           timeout: searchTimeout,
         },
       }));
@@ -151,7 +156,10 @@
             searchFallbacks.push(fallback);
           }
           const results = child && child.success
-            ? parseSearchResults(child.output)
+            ? parseSearchResults(child.output).slice(
+                0,
+                MAX_RESULTS_PER_SEARCH
+              )
             : [];
           if (results.length === 0) {
             errors.push(
@@ -247,6 +255,7 @@
         "Admit only candidate URLs whose title, snippet, URL context, or explicit plan-seed provenance gives a material retrieval opportunity for at least one research focus. Reject unrelated results even when fetch slots remain; return an empty list when the catalog has no materially relevant candidate.",
         "Among materially relevant candidates, select a compact, coverage-complete set that gives the strongest retrieval opportunity for every material research focus.",
         "Use available fetch slots for materially distinct authoritative evidence and resilient alternatives when a fetch failure would otherwise leave a material focus uncovered; among materially relevant candidates, do not minimize the set below the declared evidence needs. Allocate candidates against the declared focuses and evidence requirements, using only the closed candidate identities and provenance supplied in the packet.",
+        "Allocate by exact completion criterion as well as by subject. Do not collapse candidates that serve different criteria or different required source roles merely because they concern the same named subject; method records, evaluations, limitation disclosures, and implementation records may each close a distinct evidence obligation.",
         "A canonical plan seed without a title or snippet remains a real fetch opportunity. Do not reject it merely because discovery metadata is empty, but do not treat the seed URL itself as proof of any claim.",
         "The focuses, titles, snippets, URLs, and source pages may use different languages or writing systems.",
         "Judge meaning across languages. Never require shared words, spelling, morphology, transliteration, or script.",
@@ -688,7 +697,11 @@
         metadata: {},
       };
     });
-    const admission = combinedEvidencePacket(plan, retrievals);
+    const admission = combinedEvidencePacket(
+      plan,
+      retrievals,
+      settings.catalog_source_prefix
+    );
     const errors = uniqueStrings([
       ...(Array.isArray(settings.discovery_errors)
         ? settings.discovery_errors

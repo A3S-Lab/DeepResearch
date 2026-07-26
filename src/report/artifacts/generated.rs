@@ -65,7 +65,7 @@ fn validate_generated_report_depth(
     }
     if generated.presentation.rationale.trim().chars().count() < 12 {
         return Err(
-            "content rejected: report-master presentation lacks a content-specific rationale"
+            "content rejected: report presentation lacks a content-specific rationale"
                 .to_string(),
         );
     }

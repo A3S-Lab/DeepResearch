@@ -1,8 +1,8 @@
 use super::{
     derive_coverage, validate_source_catalog, AdmittedClaim, AdmittedClaimLedger,
-    AdmittedClaimRelation, AdmittedGap, CatalogError, ClaimEvidenceRef, ClaimKind, ClaimPlacement,
-    ClaimRelationKind, DerivationProposal, GapOrigin, ResearchContract, SourceCatalog, SourceChunk,
-    SourceRecord, StructuralCoverage,
+    AdmittedClaimRelation, AdmittedGap, CatalogError, ClaimAnalysisRole, ClaimEvidenceRef,
+    ClaimKind, ClaimPlacement, ClaimRelationKind, DerivationProposal, GapOrigin, ResearchContract,
+    SourceCatalog, SourceChunk, SourceRecord, StructuralCoverage,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,6 +40,7 @@ pub(super) struct ReportDimension {
     pub(super) material: bool,
     pub(super) coverage: StructuralCoverage,
     pub(super) claims: Vec<ReportClaim>,
+    pub(super) paragraph_claim_ids: Vec<Vec<String>>,
     pub(super) relations: Vec<ReportRelation>,
     pub(super) gaps: Vec<ReportGap>,
     pub(super) source_ids: Vec<String>,
@@ -51,6 +52,7 @@ pub(super) struct ReportClaim {
     pub(super) dimension_id: String,
     pub(super) placement: ClaimPlacement,
     pub(super) kind: ClaimKind,
+    pub(super) analysis_role: Option<ClaimAnalysisRole>,
     pub(super) text: String,
     pub(super) evidence_refs: Vec<ClaimEvidenceRef>,
     pub(super) basis_claim_ids: Vec<String>,
@@ -158,6 +160,7 @@ pub(super) fn build_no_evidence_document(contract: &ResearchContract) -> ReportD
                 material: dimension.material,
                 coverage: StructuralCoverage::GapOnly,
                 claims: Vec::new(),
+                paragraph_claim_ids: Vec::new(),
                 relations: Vec::new(),
                 gaps: vec![ReportGap {
                     id: deterministic_document_id("no-evidence-gap", &dimension.id),
@@ -249,39 +252,51 @@ pub(super) fn build_report_document(
         .spec
         .dimensions
         .iter()
-        .map(|dimension| ReportDimension {
-            dimension_id: dimension.id.clone(),
-            heading: dimension.question.clone(),
-            material: dimension.material,
-            coverage: coverage
-                .dimension(&dimension.id)
-                .expect("coverage is derived from every contract dimension")
-                .structural,
-            claims: ledger
+        .map(|dimension| {
+            let narrative = ledger
+                .narrative_sections
+                .iter()
+                .find(|section| section.dimension_id == dimension.id);
+            let claims = ledger
                 .claims
                 .iter()
                 .filter(|claim| {
                     claim.dimension_id == dimension.id && claim.placement == ClaimPlacement::Finding
                 })
                 .map(|claim| report_claim(claim, &claim_sources, &source_numbers))
-                .collect(),
-            relations: ledger
-                .relations
-                .iter()
-                .filter(|relation| relation.dimension_id == dimension.id)
-                .map(report_relation)
-                .collect(),
-            gaps: ledger
-                .gaps
-                .iter()
-                .filter(|gap| gap.dimension_id == dimension.id)
-                .map(report_gap)
-                .collect(),
-            source_ids: matching_source_ids(
-                dimension.source_target_ids.as_slice(),
-                &source_ledger,
-                &sources_by_id,
-            ),
+                .collect::<Vec<_>>();
+            ReportDimension {
+                dimension_id: dimension.id.clone(),
+                heading: narrative
+                    .map(|section| section.heading.clone())
+                    .unwrap_or_else(|| dimension.question.clone()),
+                material: dimension.material,
+                coverage: coverage
+                    .dimension(&dimension.id)
+                    .expect("coverage is derived from every contract dimension")
+                    .structural,
+                paragraph_claim_ids: narrative
+                    .map(|section| section.paragraph_claim_ids.clone())
+                    .unwrap_or_default(),
+                claims,
+                relations: ledger
+                    .relations
+                    .iter()
+                    .filter(|relation| relation.dimension_id == dimension.id)
+                    .map(report_relation)
+                    .collect(),
+                gaps: ledger
+                    .gaps
+                    .iter()
+                    .filter(|gap| gap.dimension_id == dimension.id)
+                    .map(|gap| report_gap(gap, &contract.spec.reader_labels))
+                    .collect(),
+                source_ids: matching_source_ids(
+                    dimension.source_target_ids.as_slice(),
+                    &source_ledger,
+                    &sources_by_id,
+                ),
+            }
         })
         .collect();
 
@@ -379,6 +394,7 @@ pub(super) fn build_source_backed_document(
                 material: dimension.material,
                 coverage: StructuralCoverage::GapOnly,
                 claims: vec![],
+                paragraph_claim_ids: vec![],
                 relations: vec![],
                 gaps: vec![gap],
                 source_ids,
@@ -476,6 +492,7 @@ fn report_claim(
         dimension_id: claim.dimension_id.clone(),
         placement: claim.placement,
         kind: claim.kind,
+        analysis_role: claim.analysis_role,
         text: claim.text.clone(),
         evidence_refs: claim.evidence_refs.clone(),
         basis_claim_ids: claim.basis_claim_ids.clone(),
@@ -492,12 +509,11 @@ fn report_relation(relation: &AdmittedClaimRelation) -> ReportRelation {
     }
 }
 
-fn report_gap(gap: &AdmittedGap) -> ReportGap {
+fn report_gap(gap: &AdmittedGap, labels: &super::ReaderLabels) -> ReportGap {
     ReportGap {
         id: gap.id.clone(),
         text: match gap.origin {
-            GapOrigin::HostMissingOutput => "This run did not produce a verified answer for this dimension; relevant retained sources remain listed below."
-                .to_string(),
+            GapOrigin::HostMissingOutput => labels.no_evidence_gap.clone(),
             GapOrigin::ModelProposed | GapOrigin::Planning => gap.text.clone(),
         },
         attempted_query_ids: gap.attempted_query_ids.clone(),

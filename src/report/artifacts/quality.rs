@@ -13,6 +13,24 @@ mod html_quality_gate_tests {
         );
         assert!(!complete_html_document(&scripted));
     }
+
+    #[test]
+    fn accepts_only_the_exact_fixed_report_host_script() {
+        let trusted = super::deep_research_completed_report_html_for_test(
+            "Editable report",
+            "# Editable report\n\n## Findings\n\nA source-backed finding with enough substance for the HTML quality contract.\n\n## Sources\n\n- https://example.com/evidence",
+        );
+
+        assert!(complete_html_document(&trusted));
+        assert_eq!(trusted.matches("<script").count(), 1);
+        assert!(!complete_html_document(
+            &trusted.replace("window.print()", "window.alert(1)")
+        ));
+        assert!(!complete_html_document(&trusted.replace(
+            "</body>",
+            "<script>unsafe()</script></body>"
+        )));
+    }
 }
 
 const SYNTHESIZED_ARTIFACT_MARKER: &str =

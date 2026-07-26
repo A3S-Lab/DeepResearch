@@ -4,6 +4,10 @@ mod evidence_ledger;
 mod host_digest;
 mod host_evidence;
 mod host_metadata;
+#[path = "artifacts/html_host.rs"]
+pub(crate) mod html_host;
+#[path = "artifacts/html_style.rs"]
+pub(crate) mod html_style;
 pub mod report_generation;
 
 use convergence::{
@@ -65,6 +69,9 @@ mod source_backed_tests;
 #[path = "artifacts/sources.rs"]
 mod sources;
 #[cfg(test)]
+#[path = "artifacts/typed_proposal_integration_tests.rs"]
+mod typed_proposal_integration_tests;
+#[cfg(test)]
 #[path = "artifacts/typed_proposal_tests.rs"]
 mod typed_proposal_tests;
 #[cfg(test)]
@@ -74,7 +81,8 @@ mod validation_tests;
 pub use evidence_parser::parse_embedded_structured_evidence_json;
 use html::{
     deep_research_completed_report_html, deep_research_completed_report_html_with_presentation,
-    deep_research_degraded_report_html, DEEP_RESEARCH_HTML_DOCUMENT_ATTR,
+    deep_research_degraded_report_html, deep_research_degraded_report_html_in_language,
+    DEEP_RESEARCH_HTML_DOCUMENT_ATTR,
 };
 #[doc(hidden)]
 pub fn deep_research_completed_report_html_for_test(query: &str, markdown: &str) -> String {
@@ -109,5 +117,7 @@ include!("artifacts/source_backed.rs");
 include!("artifacts/source_snapshot.rs");
 include!("artifacts/proposal.rs");
 include!("artifacts/typed_proposal.rs");
+include!("artifacts/typed_proposal_editorial.rs");
+include!("artifacts/typed_proposal_projection.rs");
 include!("artifacts/report_scope.rs");
 include!("artifacts/artifact_tests.rs");

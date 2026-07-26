@@ -137,6 +137,7 @@ fn fact(id: &str, dimension_id: &str, placement: ClaimPlacement, source_id: &str
         dimension_id: dimension_id.to_string(),
         placement,
         kind: ClaimKind::Fact,
+        analysis_role: None,
         text: format!("Factual claim {id}."),
         evidence_refs: vec![ClaimEvidenceRef {
             source_id: source_id.to_string(),
@@ -184,6 +185,7 @@ fn admitted_projection_ledger(
                 gap("partial-gap", "partial", "q-partial", "partial-source"),
                 gap("bounded-gap", "bounded", "q-bounded", "bounded-source"),
             ],
+            narrative: None,
         },
     )
     .expect("projection ledger")
@@ -218,6 +220,7 @@ fn coverage_exposes_missing_dimensions_instead_of_treating_them_as_complete() {
         claims: vec![],
         relations: vec![],
         gaps: vec![],
+        narrative_sections: vec![],
         rejections: vec![],
     };
 
@@ -312,6 +315,7 @@ fn report_document_retains_contradictions_derivations_and_planning_gaps() {
                     dimension_id: "answer".to_string(),
                     placement: ClaimPlacement::DirectAnswer,
                     kind: ClaimKind::Inference,
+                    analysis_role: None,
                     text: "The two recorded inputs imply a bounded difference.".to_string(),
                     evidence_refs: vec![],
                     basis_claim_ids: vec!["record-a".to_string(), "record-b".to_string()],
@@ -328,6 +332,7 @@ fn report_document_retains_contradictions_derivations_and_planning_gaps() {
                 claim_ids: ["record-a".to_string(), "record-b".to_string()],
             }],
             gaps: vec![],
+            narrative: None,
         },
     )
     .expect("complex ledger");

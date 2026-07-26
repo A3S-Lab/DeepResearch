@@ -7,6 +7,70 @@ The project follows Semantic Versioning while the public API remains in the
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-26
+
+### Added
+
+- Add `DeepResearchRequest`, `EvidenceScope`, `WorkspaceSourceHint`,
+  `DeepResearchResult`, `PublicationOutcome`, and `DeepResearchEvent` as the
+  typed product-integration contract.
+- Add runtime-agnostic cooperative cancellation and terminal cancelled/failed
+  lifecycle events.
+- Add run-scoped report materializers under
+  `.a3s/research/artifacts/<run-id>/` with exact receipt recovery.
+- Add request-owned output-language inference and override, strict
+  `report_language` schemas, aggregate prose-language admission, and localized
+  Chinese source-backed/no-evidence publication.
+- Add persisted analytical-claim and cross-source-synthesis quality metrics in
+  version-3 publication receipts, bind version-4 receipts to the request-owned
+  output language, and persist resolved/deeply-analyzed material-dimension
+  counts in version-5 receipts.
+- Promote at most three explicit HTTP(S) references from the user query to
+  direct retrieval seeds, with fragment removal, credential rejection,
+  deduplication, and a network-free `local_only` contract.
+
+### Changed
+
+- Route explicit workspace source hints through exact Host reads and the normal
+  provenance boundary, while keeping the raw `execute(Value)` API available for
+  legacy adapters.
+- Reserve query-slug artifacts for read-only compatibility so concurrent
+  same-query runs can publish without overwriting each other.
+- Normalize typed result diagnostics to the four publication outcomes and
+  artifact kinds without duplicating filesystem paths in the JSON output.
+- Replace the plain report link row with a sticky left action menu, a centered
+  report surface, and a sticky right table of contents. Narrow screens stack
+  both navigation regions ahead of the report without horizontal overflow.
+- Require every resolved material dimension in a comprehensive typed report to
+  contain a direct answer, two factual findings supported across two sources,
+  two inferences, three analytical claims, one cross-source synthesis, and 800
+  substantive characters, with a 1,200-character report-wide floor. The prompt
+  separates source comparison, mechanism or trade-off, implication, and
+  applicability boundary instead of accepting one catch-all synthesis
+  paragraph.
+- Add an evidence-preserving narrative plan that can choose natural section
+  headings and group adjacent claim IDs into paragraphs but cannot add,
+  paraphrase, reorder, or omit admitted findings.
+- Render the authored argument as continuous prose without fixed
+  evidence/analysis/recommendation subheadings, and move basis edges and
+  derivations into a collapsed traceability disclosure.
+- Reject repeated claim openings and near-duplicate claim prose so length and
+  claim-count gates cannot be satisfied with editorial padding.
+- Render typed, source-backed, qualified, and degraded HTML through one fixed
+  A3S Code Web-aligned visual system. Legacy presentation metadata remains
+  readable for compatibility but no longer changes report styling or layout.
+- Allow source-native supplemental retrieval queries when they improve recall
+  while keeping planner prose and final publication pinned to the user's output
+  language.
+- Plan a central shared evidence track for comprehensive named comparisons,
+  allow distinct atomic criteria to reuse the same question role, and validate
+  the required comprehensive role mix once across the complete plan.
+- Allow an all-bounded comprehensive report to publish as `Qualified` only when
+  exactly one bounded dimension contains the full two-source analytical chain,
+  at least 1,200 substantive characters, exactly one partial conclusion, and an
+  explicit typed gap. Shallow inventories and one-step comparisons still fail
+  closed to the source-backed artifact.
+
 ## [0.1.2] - 2026-07-24
 
 ### Added
@@ -113,4 +177,5 @@ The project follows Semantic Versioning while the public API remains in the
 [0.1.0]: https://github.com/A3S-Lab/DeepResearch/releases/tag/v0.1.0
 [0.1.1]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.0...v0.1.1
 [0.1.2]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.1...v0.1.2
-[Unreleased]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.2...HEAD
+[0.1.3]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.2...v0.1.3
+[Unreleased]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.3...HEAD

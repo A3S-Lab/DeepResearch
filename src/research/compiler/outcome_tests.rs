@@ -89,6 +89,7 @@ fn completed_requires_claims_only_for_every_material_dimension() {
                 dimension_id: "answer".to_string(),
                 placement: ClaimPlacement::DirectAnswer,
                 kind: ClaimKind::Fact,
+                analysis_role: None,
                 text: "The primary record establishes the answer.".to_string(),
                 evidence_refs: vec![ClaimEvidenceRef {
                     source_id: "source-answer".to_string(),
@@ -99,6 +100,7 @@ fn completed_requires_claims_only_for_every_material_dimension() {
             }],
             relations: vec![],
             gaps: vec![],
+            narrative: None,
         },
     )
     .expect("completed ledger");
@@ -155,6 +157,7 @@ fn an_honest_gap_without_claims_or_sources_is_degraded() {
                 attempted_query_ids: vec!["q-answer".to_string()],
                 missing_source_target_ids: vec!["answer-target".to_string()],
             }],
+            narrative: None,
         },
     )
     .expect("degraded ledger");
