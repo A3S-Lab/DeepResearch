@@ -6,23 +6,93 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  classify:
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          components: clippy, rustfmt
-      - name: Verify tag and package version
-        id: version
+          persist-credentials: false
+      - name: Classify the exact package version
+        id: release
         shell: bash
         run: |
+          set -euo pipefail
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           test "${GITHUB_REF_NAME}" = "v${version}"
+          commit_sha="$(git rev-parse HEAD)"
+          version_without_build="${version%%+*}"
+          prerelease=false
+          if [[ "${version_without_build}" == *-* ]]; then
+            prerelease=true
+          fi
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  package:
+    needs: classify
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.freeze.outputs.artifact-id }}
+      package_sha256: ${{ steps.package.outputs.package_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Build the candidate package once
+        id: package
+        env:
+          COMMIT_SHA: ${{ needs.classify.outputs.commit_sha }}
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${COMMIT_SHA}"
+          cargo package --locked
+          package="target/package/a3s-deep-research-${VERSION}.crate"
+          package_sha256="$(sha256sum "${package}" | awk '{print $1}')"
+          echo "package_sha256=${package_sha256}" >> "${GITHUB_OUTPUT}"
+      - name: Freeze the candidate package
+        id: freeze
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/package/a3s-deep-research-${{ needs.classify.outputs.version }}.crate
+          if-no-files-found: error
+          retention-days: 7
+
+  commercial_holdout:
+    needs: [classify, package]
+    if: ${{ needs.classify.outputs.prerelease == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require candidate-independent commercial certification
+        shell: bash
+        run: |
+          echo "Stable publishing is blocked until the candidate-independent verifier in A3S-Lab/DeepResearch#2 is provisioned." >&2
+          echo "Repository-local tests cannot certify candidate-controlled release code." >&2
+          exit 1
+
+  verify_release:
+    needs: [classify, package, commercial_holdout]
+    if: ${{ always() && !cancelled() && needs.classify.result == 'success' && needs.package.result == 'success' && (needs.classify.outputs.prerelease == 'true' || needs.commercial_holdout.result == 'success') }}
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.retain.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy, rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
@@ -30,7 +100,9 @@ jobs:
       - name: Run tests
         run: cargo test --all-targets --locked
       - name: Check embedded JavaScript
+        shell: bash
         run: |
+          set -euo pipefail
           awk '1' \
             src/workflow/retrieval_foundation.js \
             src/workflow/retrieval_web.js \
@@ -44,15 +116,67 @@ jobs:
             node --check -
           node --check src/workflow/generation.js
           node tests/workflow_discovery_smoke.mjs
-      - name: Build release package
-        run: cargo package --locked
-      - name: Publish GitHub release
+      - name: Download the frozen package after candidate code has finished
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact_id }}
+          path: target/package
+      - name: Verify the frozen package identity
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_PACKAGE_SHA256: ${{ needs.package.outputs.package_sha256 }}
+          VERSION: ${{ needs.classify.outputs.version }}
         run: |
+          set -euo pipefail
+          package="target/package/a3s-deep-research-${VERSION}.crate"
+          test "$(sha256sum "${package}" | awk '{print $1}')" = "${EXPECTED_PACKAGE_SHA256}"
+      - name: Retain the verified release package
+        id: retain
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/package/a3s-deep-research-${{ needs.classify.outputs.version }}.crate
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [classify, package, verify_release]
+    if: ${{ always() && !cancelled() && needs.classify.result == 'success' && needs.package.result == 'success' && needs.verify_release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified package on a clean runner
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.verify_release.outputs.artifact_id }}
+          path: target/package
+      - name: Publish the exact verified package
+        env:
+          COMMIT_SHA: ${{ needs.classify.outputs.commit_sha }}
+          EXPECTED_PACKAGE_SHA256: ${{ needs.package.outputs.package_sha256 }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.classify.outputs.prerelease }}
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          set -euo pipefail
+          package="target/package/a3s-deep-research-${VERSION}.crate"
+          test "$(sha256sum "${package}" | awk '{print $1}')" = "${EXPECTED_PACKAGE_SHA256}"
+
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          direct="$(git ls-remote "${remote}" "refs/tags/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          peeled="$(git ls-remote "${remote}" "refs/tags/${GITHUB_REF_NAME}^{}" | awk 'NR == 1 {print $1}')"
+          resolved="${peeled:-${direct}}"
+          test -n "${resolved}"
+          test "${resolved}" = "${COMMIT_SHA}"
+
+          release_flags=()
+          if [[ "${PRERELEASE}" == true ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh release create "${GITHUB_REF_NAME}" \
-            "target/package/a3s-deep-research-${VERSION}.crate" \
+            "${package}" \
             --generate-notes \
             --title "A3S DeepResearch ${GITHUB_REF_NAME}" \
-            --verify-tag
+            --verify-tag \
+            "${release_flags[@]}"

@@ -459,6 +459,76 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo package --locked
 ```
 
+### Commercial holdout release gate
+
+The public F01-F08 replay corpus and C01-C09 live manifest are development
+evidence, never stable-release evidence. Stable release evidence is a separately
+operated campaign over at least 48 sealed cases, with exactly three preallocated
+attempts per case and no replacement runs.
+
+The campaign has two signed stages. Before execution, a corpus custodian signs
+a plan that binds the exact commit, package bytes, lockfile, sealed corpus,
+generic sampling policy, run slots, execution profile, runner and verifier
+images, baseline, rubric, blind assignment, and quality thresholds. Its payload
+digest and transparency-log receipt must be committed outside this repository
+before the first attempt starts. After execution, an execution authority and an
+independent review authority sign the same result statement with distinct
+Ed25519 trust roots. The result binds every start and terminal receipt, the
+append-only attempt log, all report and audit artifacts, the blind ballots, a
+semantic development-overlap audit, and the corpus-retirement receipt.
+Schema v2 carries each preallocated attempt instead of self-reported case
+aggregates. The verifier recomputes the exact slot set, receipt and artifact
+roots, completion, citations, hard violations, language parity, blind ratings,
+abstention, infrastructure failure, and paired-baseline statistics from those
+records.
+
+The repository-local verifier is defense in depth, not the certification
+authority. The stable release workflow currently fails closed before publishing
+and does not expose holdout material to candidate-controlled code. It can be
+unblocked only after the candidate-independent verifier tracked in
+`A3S-Lab/DeepResearch#2` verifies the frozen `.crate` and returns an attestation
+bound to the exact subject and raw evidence bundle. Prerelease tags are marked
+as prereleases and do not claim commercial certification.
+
+Repository code is only defense in depth: a tag executes the workflow stored in
+the tagged commit, and an administrator can otherwise create a GitHub Release
+manually. Commercial certification therefore also requires organization-level
+`v*` tag rules, immutable releases, restricted publish identity, protected
+environment reviewers, and a required verifier operated from A3S Bench or
+another candidate-independent system. Until those controls exist, a GitHub
+Release is not commercial certification even when its local workflow passes.
+
+The fixed policy floor requires all of the following:
+
+- at least 90% `Synthesized` attempts among answerable cases; `Qualified`
+  remains incomplete;
+- at least 90% commercial-success attempts, at least 95% successful cases, a
+  one-sided 95% Wilson lower bound of at least 90%, and no zero-success case;
+- zero unsupported material claims, citation-integrity violations,
+  reader-boundary violations, reader-language mismatches, or artifact-parity
+  violations, with 100% material-claim audit coverage;
+- at least 95% citation recall and precision on each commercial success and in
+  the aggregate, plus blind depth, naturalness, evidence-use, and decision-value
+  scores of at least 4 out of 5;
+- at least six intentionally unanswerable cases and at least 90% safe
+  abstention, so the gate does not reward hallucination merely to reduce
+  `NoEvidence` outcomes;
+- paired baseline non-inferiority and bounded infrastructure failure, with
+  statistics aggregated by case rather than treating three repeated attempts
+  as independent tasks.
+
+Sampling coverage is expressed only through domain-neutral strata such as task
+intent, evidence condition, freshness, source mix, answerability, and language
+group. Product code contains no evaluation topic, entity, publisher, site, or
+language special case. Once failure details are exposed, that sealed corpus is
+retired rather than tuned against.
+
+The repository-side verifier checks signatures, bindings, policy floors, and
+case-level statistics. The independent authorities remain responsible for
+recomputing the signed result from the raw artifact bundle and ballots; signing
+unverified summary fields is not valid release evidence. Passing implementation
+tests or a hand-picked demonstration is never a substitute for this campaign.
+
 The test suite covers cross-topic structural isomorphism, exact-query
 authority, domain-neutral planning, closed source selection, typed provenance,
 report admission, artifact transaction faults, receipt recovery, and embedded
