@@ -1,5 +1,61 @@
-  const typedCoverageGaps = (plan, sourceCoverage) => {
+  const planNeedsIndependentAttribution = (plan) =>
+    planFocuses(plan).some((focus) =>
+      focus.completion_criteria.length > 0 &&
+      object(focus.evidence_requirements)
+        .independent_corroboration_required === true
+    );
+
+  const typedCoverageGaps = (plan, sourceCoverage, sourceAttribution) => {
     const bindings = Array.isArray(sourceCoverage) ? sourceCoverage : [];
+    const attribution = object(sourceAttribution);
+    const groupBySourceId = new Map();
+    for (const rawGroup of Array.isArray(attribution.groups)
+      ? attribution.groups
+      : []) {
+      const group = object(rawGroup);
+      if (typeof group.group_id !== "string" || !Array.isArray(group.source_ids)) {
+        continue;
+      }
+      for (const sourceId of group.source_ids) {
+        if (typeof sourceId === "string") {
+          groupBySourceId.set(sourceId, group.group_id);
+        }
+      }
+    }
+    const independentGroupPairs = new Set(
+      (Array.isArray(attribution.independent_group_pairs)
+        ? attribution.independent_group_pairs
+        : [])
+        .map((rawPair) => object(rawPair).group_ids)
+        .filter((groupIds) =>
+          Array.isArray(groupIds) &&
+          groupIds.length === 2 &&
+          typeof groupIds[0] === "string" &&
+          typeof groupIds[1] === "string" &&
+          groupIds[0] !== groupIds[1]
+        )
+        .map((groupIds) => [...groupIds].sort().join("\u0000"))
+    );
+    const hasAttributionContract = sourceAttribution !== undefined &&
+      sourceAttribution !== null;
+    const hasIndependentAttributionPair = (leftSources, rightSources) => {
+      for (const leftSource of leftSources) {
+        const leftGroup = groupBySourceId.get(leftSource);
+        if (!leftGroup) continue;
+        for (const rightSource of rightSources) {
+          const rightGroup = groupBySourceId.get(rightSource);
+          if (!rightGroup || leftGroup === rightGroup) continue;
+          if (
+            independentGroupPairs.has(
+              [leftGroup, rightGroup].sort().join("\u0000")
+            )
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
     const hasRole = (binding, role) => {
       const roles = binding && binding.roles;
       return Array.isArray(roles)
@@ -60,7 +116,17 @@
               )
             )
           );
-          const independentSatisfied = primaryRequired
+          const independentSatisfied = hasAttributionContract
+            ? primaryRequired
+              ? hasIndependentAttributionPair(
+                  primarySources,
+                  independentSources
+                )
+              : hasIndependentAttributionPair(
+                  coveredSources,
+                  independentSources
+                )
+            : primaryRequired
             ? pairableIndependentSources.size > 0
             : independentSources.size > 0 && coveredSources.size >= 2;
           if (!independentSatisfied) {
@@ -69,8 +135,12 @@
               completion_criterion_indexes: [criterionIndex],
               required_distinct_sources: primaryRequired ? 1 : 2,
               observed_distinct_sources: primaryRequired
-                ? pairableIndependentSources.size
-                : (independentSources.size > 0 ? coveredSources.size : 0),
+                ? (hasAttributionContract
+                    ? 0
+                    : pairableIndependentSources.size)
+                : (hasAttributionContract
+                    ? 0
+                    : (independentSources.size > 0 ? coveredSources.size : 0)),
             });
           }
         }
@@ -197,6 +267,7 @@
     prompt: [
       "Generate new search queries from the typed evidence gaps left after the closed initial retrieval pass.",
       "Each query must target a specific missing completion criterion, required source role, or replacement need. Prefer the source-native vocabulary most likely to retrieve authoritative evidence. When a first-party role is missing, target the responsible organization or original record type without inventing a domain.",
+      "When independent corroboration is missing, target a separately accountable origin that can directly establish the criterion; do not seek another mirror, syndication, translation, paraphrase, or derivative record.",
       "Keep each query concise: include the subject or responsible organization, one missing criterion, and one likely original record type. Do not concatenate a list of synonyms, record types, metrics, or unrelated gaps.",
       "Do not invent a report, dataset, audit, case, publication title, or responsible organization merely because it would close a gap. When a requested result may not yet exist by the packet's cutoff, target a dated latest disclosure, publication register, reporting schedule, or responsible-body status record that can establish either the result or its non-disclosure. A failed earlier search is never evidence of non-disclosure.",
       "The Host has ordered and bounded coverage_gaps for this round. Each entry is one atomic missing completion criterion and any source roles missing for that same criterion, or a criterion-local source-role gap after the criterion is otherwise supported. Target each listed gap exactly once, in order, before refining it with another query. Later rounds rotate priority across the declared material focuses and their atomic completion criteria so an earlier unresolved gap cannot starve a later one.",

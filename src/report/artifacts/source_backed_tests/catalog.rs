@@ -619,6 +619,175 @@ fn inquiry_collection_preserves_semantic_source_admission() {
 }
 
 #[test]
+fn attributed_catalog_preserves_same_origin_groups_and_positive_independence_pairs() {
+    let query = "Compare the closed multilingual records";
+    let output = attributed_inquiry_fixture(
+        query,
+        vec![
+            (
+                "record-one",
+                "原始记录",
+                "https://records.example.test/item?view=one",
+                "该记录明确说明其内容由同一责任机构发布。",
+            ),
+            (
+                "record-two",
+                "إعادة نشر السجل",
+                "https://records.example.test/item?view=two",
+                "يذكر النص أنه إعادة نشر للسجل نفسه من الجهة المسؤولة ذاتها.",
+            ),
+            (
+                "record-three",
+                "Independent record",
+                "https://independent.example.test/record",
+                "A separately accountable institution issued this independent record.",
+            ),
+        ],
+        serde_json::json!({
+            "version": 1,
+            "groups": [{
+                "group_id": "same-origin",
+                "source_ids": ["record-one", "record-two"],
+            }, {
+                "group_id": "separate-origin",
+                "source_ids": ["record-three"],
+            }],
+            "independent_group_pairs": [{
+                "group_ids": ["same-origin", "separate-origin"],
+            }],
+        }),
+    );
+
+    let attributed = deep_research_attributed_source_catalog(query, &output.to_string(), None)
+        .expect("parse attributed inquiry")
+        .expect("retain attributed catalog");
+
+    assert_eq!(attributed.catalog.sources.len(), 3);
+    assert_ne!(
+        attributed.catalog.sources[0].anchor,
+        attributed.catalog.sources[1].anchor,
+        "query-addressed resources remain distinct report sources"
+    );
+    assert_eq!(
+        attributed.attribution.group_id("source-1"),
+        attributed.attribution.group_id("source-2"),
+    );
+    assert!(attributed
+        .attribution
+        .has_verified_independent_pair(["source-1", "source-3"]));
+    assert!(!attributed
+        .attribution
+        .has_verified_independent_pair(["source-1", "source-2"]));
+    assert_eq!(
+        attributed
+            .attribution
+            .independently_attributable_group_count([
+                "source-1",
+                "source-2",
+                "source-3",
+            ]),
+        2,
+    );
+}
+
+#[test]
+fn malformed_attribution_partition_cannot_create_independent_sources() {
+    let query = "Audit the closed records";
+    let output = attributed_inquiry_fixture(
+        query,
+        vec![
+            (
+                "record-one",
+                "First record",
+                "https://first.example.test/record",
+                "The first closed record is retained.",
+            ),
+            (
+                "record-two",
+                "Second record",
+                "https://second.example.test/record",
+                "The second closed record is retained.",
+            ),
+        ],
+        serde_json::json!({
+            "version": 1,
+            "groups": [{
+                "group_id": "first",
+                "source_ids": ["record-one"],
+            }, {
+                "group_id": "duplicate",
+                "source_ids": ["record-one"],
+            }],
+            "independent_group_pairs": [{
+                "group_ids": ["first", "duplicate"],
+            }],
+        }),
+    );
+
+    let attributed = deep_research_attributed_source_catalog(query, &output.to_string(), None)
+        .expect("parse inquiry with malformed attribution")
+        .expect("retain sources for degraded publication");
+
+    assert_eq!(attributed.catalog.sources.len(), 2);
+    assert_eq!(
+        attributed.attribution,
+        DeepResearchSourceAttribution::default(),
+        "an invalid or incomplete partition must fail closed without deleting evidence"
+    );
+}
+
+#[test]
+fn canonical_source_coalescing_closes_attribution_before_independence() {
+    let query = "Audit mirrored closed records";
+    let output = attributed_inquiry_fixture(
+        query,
+        vec![
+            (
+                "record-one",
+                "First view",
+                "https://records.example.test/item#one",
+                "The first view contains the retained record.",
+            ),
+            (
+                "record-two",
+                "Second view",
+                "https://records.example.test/item#two",
+                "The second view contains the retained record.",
+            ),
+        ],
+        serde_json::json!({
+            "version": 1,
+            "groups": [{
+                "group_id": "claimed-left",
+                "source_ids": ["record-one"],
+            }, {
+                "group_id": "claimed-right",
+                "source_ids": ["record-two"],
+            }],
+            "independent_group_pairs": [{
+                "group_ids": ["claimed-left", "claimed-right"],
+            }],
+        }),
+    );
+
+    let attributed = deep_research_attributed_source_catalog(query, &output.to_string(), None)
+        .expect("parse coalesced inquiry")
+        .expect("retain coalesced source");
+
+    assert_eq!(attributed.catalog.sources.len(), 1);
+    assert_eq!(attributed.attribution.group_id("source-1"), Some("attribution-group-1"));
+    assert!(!attributed
+        .attribution
+        .has_verified_independent_pair(["source-1"]));
+    assert_eq!(
+        attributed
+            .attribution
+            .independently_attributable_group_count(["source-1"]),
+        0,
+    );
+}
+
+#[test]
 fn inquiry_relevance_survives_without_full_criterion_coverage() {
     let query = "Assess the partial Aurora migration evidence";
     let output = inquiry_relevance_fixture(query, serde_json::json!(["migration.boundary"]));

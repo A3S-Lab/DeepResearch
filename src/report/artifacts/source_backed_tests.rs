@@ -57,6 +57,60 @@ fn inquiry_relevance_fixture(
     })
 }
 
+fn attributed_inquiry_fixture(
+    query: &str,
+    sources: Vec<(&str, &str, &str, &str)>,
+    source_attribution: serde_json::Value,
+) -> serde_json::Value {
+    let results = sources
+        .into_iter()
+        .map(|(source_id, title, anchor, text)| {
+            serde_json::json!({
+                "task_id": format!("evidence_retrieval:{source_id}"),
+                "agent": "workflow",
+                "success": true,
+                "structured": {
+                    "summary": "Semantic selection retained one evidence excerpt.",
+                    "sources": [{
+                        "source_id": source_id,
+                        "title": title,
+                        "url_or_path": anchor,
+                        "reliability": "fetched",
+                        "evidence_excerpts": [{
+                            "focus": "Establish the requested record.",
+                            "quote_or_fact": text,
+                        }]
+                    }],
+                    "source_coverage": [],
+                    "source_relevance": [{
+                        "source_id": source_id,
+                        "obligation_id": "request.record",
+                    }],
+                    "relevant_obligation_ids": ["request.record"],
+                    "key_evidence": [text],
+                    "contradictions": [],
+                    "confidence": "Closed-evidence review required.",
+                    "gaps": [],
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "query": query,
+        "mode": "inquiry_collection",
+        "research": {
+            "status": "success",
+            "metadata": {
+                "evidence_selection_mode": "semantic_chunk_ids_with_typed_coverage",
+                "source_attribution_status": "verified",
+                "source_attribution": source_attribution,
+            },
+            "results": results,
+            "warnings": {"collection_errors": []},
+        }
+    })
+}
+
 include!("source_backed_tests/publication.rs");
 fn source_backed_fixture(query: &str, sources: serde_json::Value) -> serde_json::Value {
     serde_json::json!({

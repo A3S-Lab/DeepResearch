@@ -290,7 +290,10 @@
         initialCoverageBindings = initialCoverage.bindings;
       }
     }
-    const coverageGaps = typedCoverageGaps(plan, initialCoverageBindings);
+    const coverageGaps = Object.hasOwn(settings, "coverage_gaps") &&
+      Array.isArray(settings.coverage_gaps)
+      ? settings.coverage_gaps
+      : typedCoverageGaps(plan, initialCoverageBindings);
     const queryCoverageGaps = prioritizedCoverageGaps(
       plan,
       coverageGaps,

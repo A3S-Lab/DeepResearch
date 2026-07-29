@@ -81,6 +81,7 @@ fn typed_wire_matches_output_language(
 
 fn typed_unresolved_dimension_ids(
     catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     context: &DeepResearchReportContext,
 ) -> Result<Vec<String>, String> {
     let eligible_source_indexes = typed_closed_sources(catalog, context)
@@ -99,8 +100,13 @@ fn typed_unresolved_dimension_ids(
                 .ok_or_else(|| {
                     "typed report proposal received an invalid track contract".to_string()
                 })?;
-            let state = report_track_coverage_state(track, catalog, &eligible_source_indexes)
-                .ok_or_else(|| {
+            let state = report_track_coverage_state_with_attribution(
+                track,
+                catalog,
+                &eligible_source_indexes,
+                attribution,
+            )
+            .ok_or_else(|| {
                     "typed report proposal received an invalid track contract".to_string()
                 })?;
             Ok((!state.is_resolved(criterion_count)).then_some(state.track_id))

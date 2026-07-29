@@ -428,6 +428,103 @@ fn comprehensive_report_requires_cross_source_analysis_not_fact_padding() {
     assert!(report.markdown.contains(IMPLICATION));
     assert!(report.markdown.contains(BOUNDARY));
 
+    let verified_attribution = source_attribution(
+        &[
+            ("source-1", "attribution-group-1"),
+            ("source-2", "attribution-group-2"),
+        ],
+        &[("attribution-group-1", "attribution-group-2")],
+    );
+    let attributed_prompt =
+        deep_research_typed_report_proposal_prompt_with_attribution_in_language_at(
+            "Assess the migration",
+            "2026-07-24",
+            "en",
+            &catalog,
+            &verified_attribution,
+            &context,
+        )
+        .expect("attributed report prompt");
+    let attributed_packet = serde_json::from_str::<serde_json::Value>(
+        attributed_prompt
+            .split_once("CLOSED_TYPED_REPORT_PACKET=")
+            .expect("closed attributed report packet")
+            .1,
+    )
+    .expect("decode attributed report packet");
+    assert_eq!(
+        attributed_packet["source_attribution"]["independent_group_pairs"],
+        serde_json::json!([{
+            "group_ids": ["attribution-group-1", "attribution-group-2"]
+        }]),
+    );
+    assert_eq!(
+        attributed_packet["sources"][0]["attribution_group_id"],
+        "attribution-group-1",
+    );
+    assert!(
+        !attributed_prompt.contains("https://example.test/execution"),
+        "attribution must be projected as typed IDs rather than URL heuristics"
+    );
+    let verified = admit_deep_research_typed_report_draft_with_attribution_in_language_at(
+        "Assess the migration",
+        "2026-07-24",
+        "en",
+        &catalog,
+        &verified_attribution,
+        &context,
+        with_narrative(proposal.clone(), &context),
+    )
+    .expect("evaluate positively attributed synthesis");
+    assert!(
+        verified.is_some(),
+        "a positive closed independence pair may satisfy cross-source depth"
+    );
+
+    let same_origin = source_attribution(
+        &[
+            ("source-1", "attribution-group-1"),
+            ("source-2", "attribution-group-1"),
+        ],
+        &[],
+    );
+    let conflated = admit_deep_research_typed_report_draft_with_attribution_in_language_at(
+        "Assess the migration",
+        "2026-07-24",
+        "en",
+        &catalog,
+        &same_origin,
+        &context,
+        with_narrative(proposal.clone(), &context),
+    )
+    .expect("evaluate same-origin aliases");
+    assert!(
+        conflated.is_none(),
+        "two aliases from one accountable origin cannot manufacture comprehensive depth"
+    );
+
+    let unverified_separation = source_attribution(
+        &[
+            ("source-1", "attribution-group-1"),
+            ("source-2", "attribution-group-2"),
+        ],
+        &[],
+    );
+    let unknown = admit_deep_research_typed_report_draft_with_attribution_in_language_at(
+        "Assess the migration",
+        "2026-07-24",
+        "en",
+        &catalog,
+        &unverified_separation,
+        &context,
+        with_narrative(proposal.clone(), &context),
+    )
+    .expect("evaluate unverified attribution separation");
+    assert!(
+        unknown.is_none(),
+        "different groups without a positive independence pair must fail closed"
+    );
+
     let mut transitive = proposal.clone();
     let claims = transitive["claims"].as_array_mut().expect("claims array");
     claims

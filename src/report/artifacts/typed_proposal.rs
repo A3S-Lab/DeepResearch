@@ -166,6 +166,7 @@ pub(crate) struct AdmittedTypedReportDraft {
     pub(crate) report: AdmittedDeepResearchReport,
     editorial_frame: TypedEditorialFrame,
     normalized_proposal: serde_json::Value,
+    source_attribution: Option<DeepResearchSourceAttribution>,
 }
 
 #[derive(Clone, Debug)]
@@ -239,11 +240,12 @@ pub fn deep_research_typed_report_proposal_prompt_at(
     context: &DeepResearchReportContext,
 ) -> Result<String, String> {
     let output_language = crate::language::infer_deep_research_output_language(query);
-    deep_research_typed_report_proposal_prompt_in_language_at(
+    deep_research_typed_report_proposal_prompt_with_optional_attribution_in_language_at(
         query,
         current_date,
         &output_language,
         catalog,
+        None,
         context,
     )
 }
@@ -253,6 +255,42 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
     current_date: &str,
     output_language: &str,
     catalog: &DeepResearchSourceCatalog,
+    context: &DeepResearchReportContext,
+) -> Result<String, String> {
+    deep_research_typed_report_proposal_prompt_with_optional_attribution_in_language_at(
+        query,
+        current_date,
+        output_language,
+        catalog,
+        None,
+        context,
+    )
+}
+
+pub(crate) fn deep_research_typed_report_proposal_prompt_with_attribution_in_language_at(
+    query: &str,
+    current_date: &str,
+    output_language: &str,
+    catalog: &DeepResearchSourceCatalog,
+    attribution: &DeepResearchSourceAttribution,
+    context: &DeepResearchReportContext,
+) -> Result<String, String> {
+    deep_research_typed_report_proposal_prompt_with_optional_attribution_in_language_at(
+        query,
+        current_date,
+        output_language,
+        catalog,
+        Some(attribution),
+        context,
+    )
+}
+
+fn deep_research_typed_report_proposal_prompt_with_optional_attribution_in_language_at(
+    query: &str,
+    current_date: &str,
+    output_language: &str,
+    catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     context: &DeepResearchReportContext,
 ) -> Result<String, String> {
     crate::language::validate_deep_research_output_language(output_language)?;
@@ -271,9 +309,15 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
         .iter()
         .map(|track| {
             let state =
-                report_track_coverage_state(track, catalog, &eligible_source_indexes).ok_or_else(
-                    || "typed report proposal received an invalid track contract".to_string(),
-                )?;
+                report_track_coverage_state_with_attribution(
+                    track,
+                    catalog,
+                    &eligible_source_indexes,
+                    attribution,
+                )
+                .ok_or_else(|| {
+                    "typed report proposal received an invalid track contract".to_string()
+                })?;
             Ok(serde_json::json!({
                 "dimension_id": state.track_id,
                 "resolved_criterion_indexes": state.resolved_criterion_indexes,
@@ -299,6 +343,8 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
             serde_json::json!({
                 "source_id": source.id,
                 "title": source.title,
+                "attribution_group_id": attribution
+                    .and_then(|attribution| attribution.group_id(&source.id)),
                 "relevant_dimension_ids": source.relevant_track_ids,
                 "coverage": catalog.sources[source.catalog_index].coverage,
                 "chunks": source.chunks.iter().map(|chunk| {
@@ -319,6 +365,9 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
         "freshness_required": context.freshness_required,
         "dimensions": context.tracks,
         "typed_coverage_state": typed_coverage_state,
+        "source_attribution": attribution
+            .map(DeepResearchSourceAttribution::closed_packet)
+            .unwrap_or(serde_json::Value::Null),
         "minimum_quality": {
             "direct_answers": requirements.minimum_direct_answers,
             "findings": requirements.minimum_findings,
@@ -363,6 +412,7 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
          Return labels with exactly these schema-owned keys and no others: {label_keys}. Analytical roles do not create additional label fields.\n\n\
          {depth} Structure the argument as conclusion, evidence, source comparison, explanation, practical implication, and challenge or boundary. Set analysis_role=conclusion only on the one direct_answer claim for a resolved dimension. Use analysis_role=evidence only for atomic fact findings; comparison and explanation only for inference findings; implication for an inference or recommendation finding; and challenge or boundary for a fact or inference finding. A comparison states what independently attributable sources jointly establish or where they meaningfully differ. An explanation identifies why, through what mechanism, or under which trade-off the observed relationship holds. A challenge actively tests the conclusion against counterevidence or a competing interpretation. A boundary states the scope, prerequisite, uncertainty, or failure condition that limits transfer. An implication answers what the synthesis changes for the user's question. Order each dimension's claims as a coherent argument, not an inventory of source summaries. Write topical synthesis for the reader; do not narrate the retrieval process or introduce claims as source-by-source summaries. Name or attribute a source only when needed to distinguish conflicting evidence or qualify a single-source report. In a comprehensive report, keep useful partial claims from an unresolved dimension as findings and pair them with its gap, but never place a bounded conclusion in the report summary. Keep every claim independently auditable. Vary sentence openings and paragraph rhythm; do not begin more than two claims with the same formula, repeat the section heading as prose, or pad the report with near-duplicate restatements.\n\n\
          Build narrative.sections only after the claim graph is complete. Return exactly one narrative section for every declared dimension, using its exact dimension_id. Give each section a concise natural heading that helps the reader anticipate the substantive answer; do not append generic words such as \"dimension\", expose graph terminology, or reuse the same heading. In each section, flatten every finding claim for that dimension exactly once and in the same authored order. Group one to three adjacent claims per paragraph, and write neighboring claims so they read as one developing argument rather than isolated cards placed side by side. Use purpose=evidence for evidence-role facts, purpose=synthesis for comparison or explanation claims, purpose=implication for the supported consequence or recommendation, and purpose=boundary for challenge or boundary claims. Every fully resolved comprehensive material section must have at least four paragraphs covering all four purposes; a bounded section may remain shorter but must preserve its useful claims and limitation. Narrative planning may group existing claim prose but cannot add, paraphrase, or omit a claim. Direct-answer claims stay in the report summary and do not belong in narrative paragraphs.\n\n\
+         source_attribution is a Host-validated global review of the closed source portfolio. Sources in one attribution group share one accountable origin or derivative record family and never count as independent corroboration. Separate groups are not automatically independent: only a pair listed in independent_group_pairs is positively established as separately attributable. A comparison qualifies as cross-source synthesis only when its factual ancestry contains a listed independent pair. When source_attribution is null or no listed pair supports a dimension, preserve useful single-origin findings but return a bounded dimension instead of claiming independent depth. Never infer independence from source count, distinct IDs, titles, wording, language, or source order.\n\n\
          Every fact must cite one or more exact source_id/chunk_id pairs that establish the whole atomic proposition. Use at most one evidence_ref per source_id; when one source contributes multiple chunks, put all of those chunk_ids in that single evidence_ref. Attribute a single-source anecdote, estimate, forecast, benchmark, or reported case to that source and do not generalize it into an independently established result. An inference must name admitted factual or inferential basis_claim_ids; include derivation only when its method is reproducible from its input_claim_ids. A recommendation must remain normative, name every factual or inferential premise in basis_claim_ids, set derivation to null, and must not attribute the recommendation to a source that states only a premise. Never relabel an inference or recommendation as a fact.\n\n\
          A workspace source establishes its contents, not that it belongs to the active build or reachable runtime path. A claim about ownership, activation, reachability, or legacy status requires cited manifest, module, configuration, or caller evidence connecting that source to the claimed path. Similar implementation text and path names alone are insufficient; return a gap when the closed packet lacks the connecting evidence.\n\n\
          Preserve material disagreement as two separately cited fact claims plus one contradicts relation. Use contradicts only when both claims answer the same proposition under the same scope and time with mutually incompatible values or states. Different tools, capabilities, scopes, maturity levels, or compatible parts of one system are not a contradiction. Do not choose a side or manufacture a resolution. A relation may connect only two fact claims in the same dimension. Return a gap only for a dimension whose typed_coverage_state has an unsupported criterion or a missing required source role. Never expand the declared completion criteria with an extra information request. The Host supplies and validates acquisition provenance; never put query IDs, target IDs, URLs, source titles, workflow diagnostics, or runtime errors in reader-facing text.\n\n\
@@ -401,22 +451,65 @@ pub fn admit_deep_research_typed_report_proposal_in_language_at(
     context: &DeepResearchReportContext,
     proposal: serde_json::Value,
 ) -> Result<Option<AdmittedDeepResearchReport>, String> {
-    admit_deep_research_typed_report_draft_in_language_at(
+    admit_deep_research_typed_report_draft_with_optional_attribution_in_language_at(
         query,
         current_date,
         output_language,
         catalog,
+        None,
         context,
         proposal,
     )
     .map(|draft| draft.map(|draft| draft.report))
 }
 
+#[cfg(test)]
 pub(crate) fn admit_deep_research_typed_report_draft_in_language_at(
     query: &str,
     current_date: &str,
     output_language: &str,
     catalog: &DeepResearchSourceCatalog,
+    context: &DeepResearchReportContext,
+    proposal: serde_json::Value,
+) -> Result<Option<AdmittedTypedReportDraft>, String> {
+    admit_deep_research_typed_report_draft_with_optional_attribution_in_language_at(
+        query,
+        current_date,
+        output_language,
+        catalog,
+        None,
+        context,
+        proposal,
+    )
+}
+
+pub(crate) fn admit_deep_research_typed_report_draft_with_attribution_in_language_at(
+    query: &str,
+    current_date: &str,
+    output_language: &str,
+    catalog: &DeepResearchSourceCatalog,
+    attribution: &DeepResearchSourceAttribution,
+    context: &DeepResearchReportContext,
+    proposal: serde_json::Value,
+) -> Result<Option<AdmittedTypedReportDraft>, String> {
+    admit_deep_research_typed_report_draft_with_optional_attribution_in_language_at(
+        query,
+        current_date,
+        output_language,
+        catalog,
+        Some(attribution),
+        context,
+        proposal,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_deep_research_typed_report_draft_with_optional_attribution_in_language_at(
+    query: &str,
+    current_date: &str,
+    output_language: &str,
+    catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     context: &DeepResearchReportContext,
     proposal: serde_json::Value,
 ) -> Result<Option<AdmittedTypedReportDraft>, String> {
@@ -443,7 +536,8 @@ pub(crate) fn admit_deep_research_typed_report_draft_in_language_at(
     normalize_typed_recommendation_derivations(&mut wire.claims);
     normalize_typed_inference_basis_kinds(&mut wire.claims);
     normalize_typed_derivation_prose(&mut wire.claims, catalog, context);
-    let unresolved_dimension_ids = typed_unresolved_dimension_ids(catalog, context)?;
+    let unresolved_dimension_ids =
+        typed_unresolved_dimension_ids(catalog, attribution, context)?;
     let unresolved_dimension_id_set = unresolved_dimension_ids
         .iter()
         .cloned()
@@ -552,8 +646,12 @@ pub(crate) fn admit_deep_research_typed_report_draft_in_language_at(
         Some(&compiler_proposal),
     )
     .map_err(|error| format!("compile typed report proposal: {error}"))?;
-    let claim_bounded_dimensions =
-        typed_material_dimensions_needing_claim_gap(context, catalog, &compiled);
+    let claim_bounded_dimensions = typed_material_dimensions_needing_claim_gap(
+        context,
+        catalog,
+        attribution,
+        &compiled,
+    );
     if !claim_bounded_dimensions.is_empty() {
         let gap_array = compiler_proposal
             .get_mut("gaps")
@@ -600,10 +698,16 @@ pub(crate) fn admit_deep_research_typed_report_draft_in_language_at(
     }
     let requirements = deep_research_typed_report_depth_requirements(context.scope);
     let (analytical_claim_count, cross_source_synthesis_count) =
-        typed_analytical_quality(&compiled);
-    let dimension_depth = typed_dimension_depth_quality(context, catalog, &compiled);
+        typed_analytical_quality(attribution, &compiled);
+    let dimension_depth =
+        typed_dimension_depth_quality(context, catalog, attribution, &compiled);
     let material_dimensions_answered_or_bounded =
-        typed_material_dimensions_are_answered_or_bounded(context, catalog, &compiled);
+        typed_material_dimensions_are_answered_or_bounded(
+            context,
+            catalog,
+            attribution,
+            &compiled,
+        );
     let fully_resolved_depth_satisfied =
         dimension_depth.resolved_material_dimension_count > 0
             && dimension_depth.deeply_analyzed_resolved_dimension_count
@@ -786,197 +890,10 @@ pub(crate) fn admit_deep_research_typed_report_draft_in_language_at(
             claims: editorial_claims,
         },
         normalized_proposal,
+        source_attribution: attribution.cloned(),
     }))
 }
 
-fn typed_analytical_quality(
-    compiled: &crate::research::compiler::CompiledEvidenceReport,
-) -> (usize, usize) {
-    let analytical_claims = compiled.claim_support.iter().filter(|claim| {
-        matches!(
-            claim.kind,
-            crate::research::compiler::CompilerClaimKind::Inference
-                | crate::research::compiler::CompilerClaimKind::Recommendation
-        )
-    });
-    let analytical_claim_count = analytical_claims.clone().count();
-    let cross_source_synthesis_count = analytical_claims
-        .filter(|claim| {
-            claim.analysis_role
-                == Some(crate::research::compiler::CompilerAnalysisRole::Comparison)
-                && claim.basis_claim_ids.len() >= 2
-                && claim.source_ids.iter().collect::<HashSet<_>>().len() >= 2
-        })
-        .count();
-    (analytical_claim_count, cross_source_synthesis_count)
-}
-
-fn typed_dimension_depth_quality(
-    context: &DeepResearchReportContext,
-    catalog: &DeepResearchSourceCatalog,
-    compiled: &crate::research::compiler::CompiledEvidenceReport,
-) -> TypedDimensionDepthQuality {
-    if context.scope != DeepResearchReportScope::Comprehensive {
-        return TypedDimensionDepthQuality::default();
-    }
-
-    let mut quality = TypedDimensionDepthQuality::default();
-    for track in context.tracks.iter().filter(|track| {
-        track
-            .get("material")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-    }) {
-        let Some(dimension_id) = track.get("id").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let deeply_analyzed = typed_compiled_dimension_has_required_depth(dimension_id, compiled);
-        if typed_compiled_dimension_is_bounded(dimension_id, compiled) {
-            continue;
-        }
-        if !typed_track_is_resolved_by_claim_support(track, catalog, compiled) {
-            continue;
-        }
-        quality.resolved_material_dimension_count += 1;
-        if deeply_analyzed {
-            quality.deeply_analyzed_dimension_count += 1;
-            quality.deeply_analyzed_resolved_dimension_count += 1;
-        }
-    }
-    quality.deeply_analyzed_dimension_count = quality.deeply_analyzed_resolved_dimension_count;
-    quality
-}
-
-fn typed_compiled_dimension_is_bounded(
-    dimension_id: &str,
-    compiled: &crate::research::compiler::CompiledEvidenceReport,
-) -> bool {
-    compiled.coverage.iter().any(|coverage| {
-        coverage.dimension_id == dimension_id
-            && matches!(
-                coverage.status,
-                crate::research::compiler::CompilerStructuralCoverage::ClaimsAndGap
-                    | crate::research::compiler::CompilerStructuralCoverage::GapOnly
-            )
-    })
-}
-
-fn typed_compiled_dimension_has_required_depth(
-    dimension_id: &str,
-    compiled: &crate::research::compiler::CompiledEvidenceReport,
-) -> bool {
-    let claims = compiled
-        .claim_support
-        .iter()
-        .filter(|claim| claim.dimension_id == dimension_id)
-        .collect::<Vec<_>>();
-    let has_conclusion = claims.iter().any(|claim| {
-        claim.placement == crate::research::compiler::CompilerClaimPlacement::DirectAnswer
-            && claim.analysis_role
-                == Some(crate::research::compiler::CompilerAnalysisRole::Conclusion)
-    });
-    let evidence_findings = claims
-        .iter()
-        .filter(|claim| {
-            claim.placement == crate::research::compiler::CompilerClaimPlacement::Finding
-                && claim.kind == crate::research::compiler::CompilerClaimKind::Fact
-                && claim.analysis_role
-                    == Some(crate::research::compiler::CompilerAnalysisRole::Evidence)
-        })
-        .count();
-    let role_count = |roles: &[crate::research::compiler::CompilerAnalysisRole]| {
-        claims
-            .iter()
-            .filter(|claim| {
-                claim
-                    .analysis_role
-                    .is_some_and(|role| roles.contains(&role))
-            })
-            .count()
-    };
-    let factual_source_count = claims
-        .iter()
-        .filter(|claim| claim.kind == crate::research::compiler::CompilerClaimKind::Fact)
-        .flat_map(|claim| claim.source_ids.iter())
-        .collect::<HashSet<_>>()
-        .len();
-    let cross_source_synthesis_count = claims
-        .iter()
-        .filter(|claim| {
-            claim.analysis_role
-                == Some(crate::research::compiler::CompilerAnalysisRole::Comparison)
-                && claim.basis_claim_ids.len() >= 2
-                && claim.source_ids.iter().collect::<HashSet<_>>().len() >= 2
-        })
-        .count();
-    let claims_by_id = claims
-        .iter()
-        .copied()
-        .map(|claim| (claim.claim_id.as_str(), claim))
-        .collect::<std::collections::HashMap<_, _>>();
-    let has_integrated_implication = claims.iter().any(|claim| {
-        claim.analysis_role
-            == Some(crate::research::compiler::CompilerAnalysisRole::Implication)
-            && typed_claim_has_ancestor_role(
-                claim,
-                &claims_by_id,
-                crate::research::compiler::CompilerAnalysisRole::Comparison,
-            )
-            && typed_claim_has_ancestor_role(
-                claim,
-                &claims_by_id,
-                crate::research::compiler::CompilerAnalysisRole::Explanation,
-            )
-    });
-    let substantive_character_count = claims
-        .iter()
-        .map(|claim| claim.substantive_character_count)
-        .sum::<usize>();
-
-    has_conclusion
-        && evidence_findings >= COMPREHENSIVE_DIMENSION_MIN_FACT_FINDINGS
-        && role_count(&[crate::research::compiler::CompilerAnalysisRole::Comparison])
-            >= COMPREHENSIVE_DIMENSION_MIN_COMPARISONS
-        && role_count(&[crate::research::compiler::CompilerAnalysisRole::Explanation])
-            >= COMPREHENSIVE_DIMENSION_MIN_EXPLANATIONS
-        && role_count(&[crate::research::compiler::CompilerAnalysisRole::Implication])
-            >= COMPREHENSIVE_DIMENSION_MIN_IMPLICATIONS
-        && role_count(&[
-            crate::research::compiler::CompilerAnalysisRole::Challenge,
-            crate::research::compiler::CompilerAnalysisRole::Boundary,
-        ]) >= COMPREHENSIVE_DIMENSION_MIN_CHALLENGES_OR_BOUNDARIES
-        && factual_source_count >= COMPREHENSIVE_DIMENSION_MIN_SOURCES
-        && cross_source_synthesis_count >= COMPREHENSIVE_DIMENSION_MIN_CROSS_SOURCE_SYNTHESES
-        && has_integrated_implication
-        && substantive_character_count >= COMPREHENSIVE_DIMENSION_MIN_SUBSTANTIVE_CHARACTERS
-}
-
-fn typed_claim_has_ancestor_role(
-    claim: &crate::research::compiler::CompilerClaimSupport,
-    claims_by_id: &std::collections::HashMap<
-        &str,
-        &crate::research::compiler::CompilerClaimSupport,
-    >,
-    required_role: crate::research::compiler::CompilerAnalysisRole,
-) -> bool {
-    let mut pending = claim.basis_claim_ids.clone();
-    let mut visited = HashSet::<String>::new();
-    while let Some(claim_id) = pending.pop() {
-        if !visited.insert(claim_id.clone()) {
-            continue;
-        }
-        let Some(ancestor) = claims_by_id.get(claim_id.as_str()).copied() else {
-            continue;
-        };
-        if ancestor.dimension_id != claim.dimension_id {
-            continue;
-        }
-        if ancestor.analysis_role == Some(required_role) {
-            return true;
-        }
-        pending.extend(ancestor.basis_claim_ids.iter().cloned());
-    }
-    false
-}
+include!("typed_proposal_depth.rs");
 
 include!("typed_proposal_validation.rs");

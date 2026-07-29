@@ -71,6 +71,14 @@ async function run(ctx, inputs) {
   // attempt so a slow source cannot starve later siblings, but allow the same
   // 270-second long-tail bound used by other closed-evidence generations.
   const MODEL_GENERATION_SHARD_ACTIVE_TIMEOUT_MS = 270_000;
+  // Attribution compares a changed, already reduced source portfolio when
+  // declared independence otherwise appears complete, and compares the final
+  // portfolio before return. Its packet retains bounded excerpts from every
+  // selected source; an unchanged portfolio reuses its prior review.
+  const SOURCE_ATTRIBUTION_ACTIVE_TIMEOUT_MS = 180_000;
+  const MAX_ATTRIBUTION_EXCERPTS_PER_SOURCE = 4;
+  const MAX_ATTRIBUTION_TITLE_BYTES = 160;
+  const MAX_ATTRIBUTION_EXCERPT_BYTES = 320;
   const STEP_DISCOVER_WEB = "discover_web_sources";
   const STEP_SELECT_WEB = "select_web_sources";
   const STEP_SELECT_WEB_SHARD_PREFIX = "select_web_sources_shard_";
@@ -98,6 +106,9 @@ async function run(ctx, inputs) {
     "select_supplemental_evidence_chunks_shard_recovery_";
   const STEP_SELECT_SUPPLEMENTAL_SOURCE_PREFIX =
     "select_supplemental_evidence_chunks_source_";
+  const STEP_ATTRIBUTE_SOURCES = "attribute_selected_sources";
+  const STEP_ATTRIBUTE_SOURCES_ROUND_PREFIX =
+    "attribute_selected_sources_round_";
 
   const object = (value) =>
     value && typeof value === "object" && !Array.isArray(value) ? value : {};

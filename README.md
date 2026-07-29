@@ -100,17 +100,26 @@ with an explicit locale selection may replace it with
   the original query; unmatched, duplicate, or invented mappings fail closed
 - **Closed Evidence Admission**: Admit only exact source and chunk identities
   selected through typed track, criterion, and source-role edges
+- **Global Source Attribution**: Review each changed reduced source portfolio
+  as one closed packet when declared independence otherwise appears complete,
+  reuse the result while that portfolio is unchanged, and preserve or refresh
+  it for the final portfolio. Collapse mirrors, syndication, translations, and
+  other derivative records into accountable-origin groups, and count
+  independence only for positively established group pairs; an unavailable or
+  malformed attribution pass preserves the sources but cannot satisfy
+  independent depth
 - **Typed Claim Graphs**: Distinguish facts, inferences, and recommendations,
   with explicit citations, basis edges, derivations, contradictions, and gaps
 - **Reader-Language Pinning**: Infer or accept one BCP 47 output language and
   bind planning, report schema, admission, and publication to that exact value
 - **Per-Dimension Depth Gate**: Require every resolved material dimension in a
   comprehensive report to contain a direct answer, two factual findings from
-  distinct sources, a comparison and explanation that converge through the
-  typed basis graph into an implication, and an explicit challenge or
-  applicability boundary. Depth counts only Unicode letters and numbers in
-  admitted claim prose, so punctuation, layout, citations, and headings cannot
-  pad the threshold. Only complete material coverage can become a successful
+  positively independent attribution groups, a comparison and explanation
+  that converge through the typed basis graph into an implication, and an
+  explicit challenge or applicability boundary. Depth counts only Unicode
+  letters and numbers in admitted claim prose, so punctuation, layout,
+  citations, and headings cannot pad the threshold. Only complete material
+  coverage can become a successful
   `Synthesized` result; any `Qualified` graph remains an explicitly incomplete
   preview
 - **Independent Commercial Review**: After graph admission, require a separate
@@ -265,7 +274,11 @@ semantic outline ──> bounded supplemental queries      │
                                   Host inquiry projection of exact
                                   source/chunk IDs, criteria, and roles
                                                        │
-                                  up to four typed-gap retrieval rounds
+                                  up to four typed-gap retrieval rounds,
+                                  with changed-portfolio attribution checks
+                                                       │
+                                  final source-attribution partition
+                                  and positive independence pairs
                                                        │
                          ┌─────────────┴─────────────┐
                          │                           │
@@ -318,14 +331,18 @@ and typed relationships:
   satisfies;
 - criterion-scoped primary and independent roles record the required source
   shape;
+- one final closed attribution partition maps every selected source exactly
+  once to an accountable-origin group, while a separate positive edge set
+  records only group pairs whose independent attribution is established;
 - facts cite admitted source and chunk IDs;
 - inferences and recommendations name admitted basis claims;
 - derived claims retain their method and exact input claim IDs;
 - contradiction relations preserve both supported claims;
 - typed gaps bind unresolved obligations to their material dimensions.
 
-Track relevance never closes a completion criterion, and criterion coverage
-never manufactures a claim. A focused report may publish one structurally
+Track relevance never closes a completion criterion, criterion coverage never
+manufactures a claim, and a source role never manufactures attribution
+independence. A focused report may publish one structurally
 sufficient cited claim. A comprehensive report reaches `Synthesized` only when
 its admitted graph closes every material dimension. A report with both deeply
 analyzed resolved dimensions and unresolved dimensions may remain `Qualified`
@@ -336,11 +353,13 @@ satisfies the full two-source analytical depth gate and retains its gap.
 
 The typed comprehensive gate retains the report-wide floor of one direct
 answer, five supporting findings, six admitted claims, two cited sources, and
-1,200 non-whitespace claim characters. It also evaluates every resolved material
-dimension independently. Each such dimension needs exactly one leading answer,
-at least two factual findings whose support spans two attributable sources, at
-least two inferences, at least three analytical claims in total, one
-cross-source synthesis, and 800 substantive characters. The generation
+1,200 information-bearing Unicode letter-or-number characters in claim prose.
+It also evaluates every resolved material dimension independently. Each such
+dimension needs exactly one leading answer,
+at least two factual findings whose support spans a positively verified pair of
+independent attribution groups, at least three analytical claims covering
+comparison, explanation, and implication, one explicit challenge or boundary,
+one cross-source synthesis, and 1,200 substantive characters. The generation
 contract asks those analytical steps to cover source comparison, mechanism or
 trade-off, practical implication, and an applicability boundary or
 counterexample. Repeated openings and near-duplicate claim prose are rejected;
@@ -376,10 +395,20 @@ the sources actually used by the accepted claims and adds a typed gap when that
 smaller evidence set no longer satisfies a declared source requirement.
 
 Small source catalogs use one closed selector. Larger catalogs are partitioned
-into complete source-local JSON windows of at most 32 KiB, followed by an
-exact-ID reduction that retains at most four excerpts per source. The current
-report attempt receives a generated JSON Schema whose dimension, source, and
-chunk enums contain only that closed packet.
+into byte-bounded source-aware JSON windows with lossless source-local recovery,
+followed by an exact-ID reduction that retains at most four excerpts per source.
+The current report attempt receives a generated JSON Schema whose dimension,
+source, and chunk enums contain only that closed packet. When declared
+independence otherwise appears complete, a global attribution pass receives
+every currently selected source with byte-bounded excerpts but no URL field.
+If it identifies a missing independent pair, that exact typed role gap can
+drive the remaining supplemental retrieval budget. A changed final portfolio
+is reviewed again; an unchanged one reuses the prior result. The Host rejects
+unknown, duplicate, or missing source IDs, canonicalizes the complete
+partition, closes groups again when report-source canonicalization merges
+aliases, and discards any independence edge that collapses to one final group.
+Different IDs, URLs, hosts, languages, wording, or singleton groups never
+establish independence by themselves.
 
 Reader prose is untrusted data. The Host never derives identity, relevance, or
 evidence support from query, claim, source, title, URL, publisher, numbers, or

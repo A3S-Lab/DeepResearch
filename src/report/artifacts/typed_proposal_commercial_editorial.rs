@@ -314,14 +314,16 @@ fn apply_deep_research_typed_editorial_plan_inner(
     )
     .map_err(|error| format!("decode normalized typed editorial plan: {error}"))?;
     validate_typed_narrative_plan(&editorial_wire, context)?;
-    let report = admit_deep_research_typed_report_proposal_in_language_at(
+    let report = admit_deep_research_typed_report_draft_with_optional_attribution_in_language_at(
         query,
         current_date,
         output_language,
         catalog,
+        draft.source_attribution.as_ref(),
         context,
         draft.normalized_proposal,
     )?
+    .map(|draft| draft.report)
     .ok_or_else(|| {
         "typed editorial plan did not preserve the admitted report quality contract".to_string()
     })?;

@@ -15,6 +15,12 @@
     ) {
       return "Typed gap-query generation";
     }
+    if (
+      id === STEP_ATTRIBUTE_SOURCES ||
+      id.startsWith(STEP_ATTRIBUTE_SOURCES_ROUND_PREFIX)
+    ) {
+      return "Closed source-attribution review";
+    }
     return "Semantic chunk selection";
   };
 
@@ -106,6 +112,11 @@
     on_exhausted: "continue_workflow",
   };
   const semanticShardSelectionRetry = {
+    max_attempts: 1,
+    delay_ms: 0,
+    on_exhausted: "continue_workflow",
+  };
+  const sourceAttributionRetry = {
     max_attempts: 1,
     delay_ms: 0,
     on_exhausted: "continue_workflow",
@@ -716,6 +727,9 @@
   let supplementalRoundCount = 0;
   let supplementalFetchCount = 0;
   let generatedGapQueryCount = 0;
+  let reviewedAttributionIdentity = "";
+  let reviewedAttributionContract = null;
+  let reviewedAttributionError = "";
   const initialMaterializedSourceCount = materializedSourceCount(selection);
   const excludedCandidates = [
     ...(Array.isArray(webSourceSelection.candidates)
@@ -724,7 +738,39 @@
   ];
   for (let round = 1; round <= gapRoundCount; round += 1) {
     const coverageBindings = materializedSourceCoverage(selection);
-    if (typedCoverageGaps(plan, coverageBindings).length === 0) {
+    let coverageGaps = typedCoverageGaps(plan, coverageBindings);
+    if (
+      coverageGaps.length === 0 &&
+      planNeedsIndependentAttribution(plan)
+    ) {
+      const attributionPacket = materializedAttributionPacket(selection);
+      const attributionIdentity = JSON.stringify(attributionPacket);
+      if (attributionIdentity !== reviewedAttributionIdentity) {
+        const attributionStepId =
+          `${STEP_ATTRIBUTE_SOURCES_ROUND_PREFIX}${round}`;
+        const attributionReview = sourceAttributionReview(
+          selection,
+          attributionStepId,
+          outputs,
+          failures,
+          sourceAttributionRetry
+        );
+        if (attributionReview.schedule) {
+          return attributionReview.schedule;
+        }
+        reviewedAttributionIdentity = attributionIdentity;
+        reviewedAttributionContract = attributionReview.contract;
+        reviewedAttributionError = attributionReview.error;
+      }
+      if (reviewedAttributionContract) {
+        coverageGaps = typedCoverageGaps(
+          plan,
+          coverageBindings,
+          reviewedAttributionContract
+        );
+      }
+    }
+    if (coverageGaps.length === 0) {
       break;
     }
     const remainingRounds = gapRoundCount - round + 1;
@@ -768,6 +814,7 @@
       packet: round === 1 ? packet : null,
       semantic_selection: round === 1 ? semanticSelection : null,
       coverage_bindings: coverageBindings,
+      coverage_gaps: coverageGaps,
       outputs,
       failures,
       retrieval_retry: retrievalRetry,
@@ -818,9 +865,32 @@
       break;
     }
   }
+  const finalAttributionPacket = materializedAttributionPacket(selection);
+  const finalAttributionIdentity = JSON.stringify(finalAttributionPacket);
+  let finalAttributionContract = reviewedAttributionContract;
+  let finalAttributionError = reviewedAttributionError;
+  if (finalAttributionIdentity !== reviewedAttributionIdentity) {
+    const attributionReview = sourceAttributionReview(
+      selection,
+      STEP_ATTRIBUTE_SOURCES,
+      outputs,
+      failures,
+      sourceAttributionRetry
+    );
+    if (attributionReview.schedule) {
+      return attributionReview.schedule;
+    }
+    finalAttributionContract = attributionReview.contract;
+    finalAttributionError = attributionReview.error;
+  }
+  const finalCoverageAttribution = finalAttributionContract ||
+    (finalAttributionPacket.sources.length > 0
+      ? { groups: [], independent_group_pairs: [] }
+      : undefined);
   const finalCoverageGaps = typedCoverageGaps(
     plan,
-    materializedSourceCoverage(selection)
+    materializedSourceCoverage(selection),
+    finalCoverageAttribution
   );
   selection.metadata = Object.assign({}, object(selection.metadata), {
     typed_coverage_gap_count: finalCoverageGaps.length,
@@ -833,6 +903,13 @@
     ),
     generated_gap_query_count: generatedGapQueryCount,
   });
+  if (finalAttributionPacket.sources.length > 0) {
+    selection = applySourceAttribution(
+      selection,
+      finalAttributionContract,
+      finalAttributionError
+    );
+  }
   const research = researchResult(selection);
   return {
     type: "complete",

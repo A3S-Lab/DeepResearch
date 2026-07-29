@@ -15,6 +15,7 @@ pub fn retrieval_workflow_source() -> &'static str {
             include_str!("workflow/retrieval_selection.js"),
             include_str!("workflow/retrieval_reduction.js"),
             include_str!("workflow/retrieval_materialization.js"),
+            include_str!("workflow/retrieval_attribution.js"),
             include_str!("workflow/retrieval_gap.js"),
             include_str!("workflow/retrieval_loop.js"),
             include_str!("workflow/retrieval_local.js"),

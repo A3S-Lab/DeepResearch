@@ -10,6 +10,7 @@ const workflowFiles = [
   "src/workflow/retrieval_selection.js",
   "src/workflow/retrieval_reduction.js",
   "src/workflow/retrieval_materialization.js",
+  "src/workflow/retrieval_attribution.js",
   "src/workflow/retrieval_gap.js",
   "src/workflow/retrieval_loop.js",
   "src/workflow/retrieval_local.js",
@@ -42,6 +43,7 @@ const caseFiles = [
   "tests/workflow_discovery_smoke/gap_setup.mjs",
   "tests/workflow_discovery_smoke/criterion_gap.mjs",
   "tests/workflow_discovery_smoke/supplemental_rounds.mjs",
+  "tests/workflow_discovery_smoke/source_attribution.mjs",
 ];
 
 const caseSource = (

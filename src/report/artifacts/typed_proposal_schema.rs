@@ -2,7 +2,7 @@ pub fn deep_research_typed_report_proposal_schema_for(
     catalog: &DeepResearchSourceCatalog,
     context: &DeepResearchReportContext,
 ) -> Result<serde_json::Value, String> {
-    deep_research_typed_report_proposal_schema(catalog, context, None)
+    deep_research_typed_report_proposal_schema(catalog, None, context, None)
 }
 pub fn deep_research_typed_report_proposal_schema_for_language(
     catalog: &DeepResearchSourceCatalog,
@@ -10,11 +10,27 @@ pub fn deep_research_typed_report_proposal_schema_for_language(
     output_language: &str,
 ) -> Result<serde_json::Value, String> {
     crate::language::validate_deep_research_output_language(output_language)?;
-    deep_research_typed_report_proposal_schema(catalog, context, Some(output_language))
+    deep_research_typed_report_proposal_schema(catalog, None, context, Some(output_language))
+}
+
+pub(crate) fn deep_research_typed_report_proposal_schema_with_attribution_for_language(
+    catalog: &DeepResearchSourceCatalog,
+    attribution: &DeepResearchSourceAttribution,
+    context: &DeepResearchReportContext,
+    output_language: &str,
+) -> Result<serde_json::Value, String> {
+    crate::language::validate_deep_research_output_language(output_language)?;
+    deep_research_typed_report_proposal_schema(
+        catalog,
+        Some(attribution),
+        context,
+        Some(output_language),
+    )
 }
 
 fn deep_research_typed_report_proposal_schema(
     catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     context: &DeepResearchReportContext,
     output_language: Option<&str>,
 ) -> Result<serde_json::Value, String> {
@@ -33,7 +49,8 @@ fn deep_research_typed_report_proposal_schema(
         .flat_map(|source| source.chunks.iter().map(|chunk| chunk.id.clone()))
         .collect::<Vec<_>>();
     let dimension_ids = typed_dimension_ids(context)?;
-    let unresolved_dimension_ids = typed_unresolved_dimension_ids(catalog, context)?;
+    let unresolved_dimension_ids =
+        typed_unresolved_dimension_ids(catalog, attribution, context)?;
     let gap_dimension_ids = if unresolved_dimension_ids.is_empty() {
         typed_dimension_ids(context)?
     } else {

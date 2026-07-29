@@ -161,6 +161,28 @@ fn catalog(sources: Vec<DeepResearchCatalogSource>) -> DeepResearchSourceCatalog
     }
 }
 
+fn source_attribution(
+    source_groups: &[(&str, &str)],
+    independent_group_pairs: &[(&str, &str)],
+) -> DeepResearchSourceAttribution {
+    DeepResearchSourceAttribution {
+        source_group_ids: source_groups
+            .iter()
+            .map(|(source_alias, group_id)| ((*source_alias).to_string(), (*group_id).to_string()))
+            .collect(),
+        independent_group_pairs: independent_group_pairs
+            .iter()
+            .map(|(left, right)| {
+                if left < right {
+                    ((*left).to_string(), (*right).to_string())
+                } else {
+                    ((*right).to_string(), (*left).to_string())
+                }
+            })
+            .collect(),
+    }
+}
+
 fn fact(id: &str, placement: &str, text: &str, source_id: &str) -> serde_json::Value {
     fact_for_dimension(id, "request.answer", placement, text, source_id)
 }

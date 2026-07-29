@@ -230,7 +230,7 @@
     return {
       tool: "web_search/web_fetch/read",
       algorithm:
-        "plan_discover_semantic_admit_retrieve_typed_coverage_supplement",
+        "plan_discover_semantic_admit_retrieve_typed_coverage_supplement_attribute",
       status,
       metadata: Object.assign({}, object(selection.metadata), {
         result_count: results.length,

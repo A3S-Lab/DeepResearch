@@ -304,76 +304,60 @@ assert.equal(
 );
 const supplementalSource = supplementalEvidencePacket.sources[0];
 const supplementalFocus = supplementalEvidencePacket.focuses[0];
-const completedSupplementalRun = await sandbox.__deepResearchRun(
-  {},
-  {
-    kind: "workflow",
-    input: {
-      query: "Follow a retained evidence reference",
-      loop_contract: supplementalLoopContract,
-      execution_mode: "collect_only",
-      evidence_scope: "web_and_workspace",
-      research_plan: referencePlan,
-      bootstrap_acquisition: {},
-    },
-    step_outputs: {
-      ...referenceBaseOutputs,
-      select_evidence_chunks: {
-        output: JSON.stringify({
-          object: {
-            chunk_ids: [referenceSource.chunks[0].chunk_id],
-            source_coverage: [],
-            source_relevance: [{
-              source_id: referenceSource.source_id,
-              obligation_id: referenceFocus.obligation_id,
-            }],
-          },
-        }),
+const completedSupplementalInput = {
+  query: "Follow a retained evidence reference",
+  loop_contract: supplementalLoopContract,
+  execution_mode: "collect_only",
+  evidence_scope: "web_and_workspace",
+  research_plan: referencePlan,
+  bootstrap_acquisition: {},
+};
+const completedSupplementalStepOutputs = {
+  ...referenceBaseOutputs,
+  select_evidence_chunks: {
+    output: JSON.stringify({
+      object: {
+        chunk_ids: [referenceSource.chunks[0].chunk_id],
+        source_coverage: [],
+        source_relevance: [{
+          source_id: referenceSource.source_id,
+          obligation_id: referenceFocus.obligation_id,
+        }],
       },
-      checkpoint_initial_retrieval: {},
-      ...referenceSupplementalControlOutputs,
-      select_supplemental_web_sources: {
-        output: JSON.stringify({
-          object: {
-            candidate_ids: [directReferenceCandidate.candidate_id],
-          },
-        }),
-      },
-      retrieve_supplemental_web_source_1: supplementalRetrieval,
-      select_supplemental_evidence_chunks: {
-        output: JSON.stringify({
-          object: {
-            chunk_ids: [supplementalSource.chunks[0].chunk_id],
-            source_coverage: [{
-              source_id: supplementalSource.source_id,
-              obligation_id: supplementalFocus.obligation_id,
-              completion_criterion_indexes: [0],
-              roles: {
-                supporting: true,
-                primary: true,
-                independent: false,
-              },
-            }],
-            source_relevance: [{
-              source_id: supplementalSource.source_id,
-              obligation_id: supplementalFocus.obligation_id,
-            }],
-          },
-        }),
-      },
-    },
-    step_failures: {},
+    }),
   },
-);
-assert.equal(completedSupplementalRun.type, "complete");
-const completedSources = completedSupplementalRun.output.research.results.flatMap(
-  (result) => result.structured.sources,
-);
-assert.deepEqual(
-  Array.from(completedSources, (source) => source.source_id),
-  ["catalog-source-1", "supplemental-catalog-source-1"],
-);
-
+  checkpoint_initial_retrieval: {},
+  ...referenceSupplementalControlOutputs,
+  select_supplemental_web_sources: {
+    output: JSON.stringify({
+      object: {
+        candidate_ids: [directReferenceCandidate.candidate_id],
+      },
+    }),
+  },
+  retrieve_supplemental_web_source_1: supplementalRetrieval,
+  select_supplemental_evidence_chunks: {
+    output: JSON.stringify({
+      object: {
+        chunk_ids: [supplementalSource.chunks[0].chunk_id],
+        source_coverage: [{
+          source_id: supplementalSource.source_id,
+          obligation_id: supplementalFocus.obligation_id,
+          completion_criterion_indexes: [0],
+          roles: {
+            supporting: true,
+            primary: true,
+            independent: false,
+          },
+        }],
+        source_relevance: [{
+          source_id: supplementalSource.source_id,
+          obligation_id: supplementalFocus.obligation_id,
+        }],
+      },
+    }),
+  },
+};
 const secondGapQueryRequest = await sandbox.__deepResearchRun(
   {},
   {

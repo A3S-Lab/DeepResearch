@@ -83,6 +83,17 @@ pub fn deep_research_source_catalog(
     workflow_output: &str,
     workflow_metadata: Option<&serde_json::Value>,
 ) -> Result<Option<DeepResearchSourceCatalog>, String> {
+    Ok(
+        deep_research_attributed_source_catalog(query, workflow_output, workflow_metadata)?
+            .map(|catalog| catalog.catalog),
+    )
+}
+
+pub(crate) fn deep_research_attributed_source_catalog(
+    query: &str,
+    workflow_output: &str,
+    workflow_metadata: Option<&serde_json::Value>,
+) -> Result<Option<DeepResearchAttributedSourceCatalog>, String> {
     let canonical = deep_research_canonical_workflow_output(workflow_output, workflow_metadata);
     if canonical.trim().is_empty() {
         return Ok(None);
@@ -137,6 +148,7 @@ pub fn deep_research_source_catalog(
     let mut source_ids = HashSet::new();
     let mut chunk_ids = HashSet::new();
     let mut source_by_anchor = HashMap::<String, usize>::new();
+    let mut catalog_index_by_source_id = HashMap::<String, usize>::new();
     let mut retained_chunk_count = 0usize;
 
     for raw_source in raw_sources.iter().take(SOURCE_CATALOG_MAX_SOURCES) {
@@ -209,6 +221,7 @@ pub fn deep_research_source_catalog(
             continue;
         }
         if let Some(index) = source_by_anchor.get(&anchor).copied() {
+            catalog_index_by_source_id.insert(source_id, index);
             let retained_source = &mut catalog.sources[index];
             retained_source.claim_eligible &= claim_eligible;
             retained_source.semantically_admitted |= semantic_source_admission;
@@ -232,7 +245,9 @@ pub fn deep_research_source_catalog(
             continue;
         }
         let alias = format!("source-{}", catalog.sources.len() + 1);
-        source_by_anchor.insert(anchor.clone(), catalog.sources.len());
+        let catalog_index = catalog.sources.len();
+        source_by_anchor.insert(anchor.clone(), catalog_index);
+        catalog_index_by_source_id.insert(source_id, catalog_index);
         catalog.sources.push(DeepResearchCatalogSource {
             alias,
             title,
@@ -248,7 +263,16 @@ pub fn deep_research_source_catalog(
     if catalog.sources.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(catalog))
+        let attribution = catalog_source_attribution(
+            packet.get("source_attribution"),
+            raw_sources,
+            &catalog_index_by_source_id,
+            &catalog,
+        );
+        Ok(Some(DeepResearchAttributedSourceCatalog {
+            catalog,
+            attribution,
+        }))
     }
 }
 
@@ -266,6 +290,17 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
     let results = value
         .pointer("/research/results")
         .and_then(serde_json::Value::as_array)?;
+    let source_attribution = (value
+        .pointer("/research/metadata/source_attribution_status")
+        .and_then(serde_json::Value::as_str)
+        == Some("verified"))
+    .then(|| {
+        value
+            .pointer("/research/metadata/source_attribution")
+            .cloned()
+    })
+    .flatten()
+    .unwrap_or(serde_json::Value::Null);
     let mut sources = Vec::new();
     for result in results {
         let Some(structured) = result.get("structured") else {
@@ -372,6 +407,7 @@ fn selected_research_acquisition(value: &serde_json::Value) -> Option<serde_json
         "packet": {
             "version": 1,
             "sources": sources,
+            "source_attribution": source_attribution,
         },
         "errors": value
             .pointer("/research/warnings/collection_errors")
@@ -508,6 +544,7 @@ fn catalog_source_roles(value: Option<&serde_json::Value>) -> Option<(bool, bool
     ))
 }
 
+include!("source_backed/attribution.rs");
 include!("source_backed/publication.rs");
 include!("source_backed/sanitization.rs");
 include!("source_backed/artifact_validation.rs");
