@@ -113,6 +113,40 @@ fn completed_requires_claims_only_for_every_material_dimension() {
 }
 
 #[test]
+fn compiler_depth_metric_excludes_punctuation_across_reader_scripts() {
+    let (contract, catalog) = one_dimension_fixture(AcquisitionOutcome::Fetched, true);
+    let proposal = ClaimLedgerProposal {
+        claims: vec![ClaimProposal {
+            id: "answer-fact".to_string(),
+            dimension_id: "answer".to_string(),
+            placement: ClaimPlacement::DirectAnswer,
+            kind: ClaimKind::Fact,
+            analysis_role: None,
+            text: "Evidence 2026；研究。دليل؟カナ！कखग。".to_string(),
+            evidence_refs: vec![ClaimEvidenceRef {
+                source_id: "source-answer".to_string(),
+                chunk_ids: vec!["source-answer:chunk:1".to_string()],
+            }],
+            basis_claim_ids: vec![],
+            derivation: None,
+        }],
+        relations: vec![],
+        gaps: vec![],
+        narrative: None,
+    };
+    let spec = serde_json::to_value(&contract.spec).expect("serialize spec");
+    let plan = serde_json::to_value(&contract.plan).expect("serialize plan");
+    let catalog = serde_json::to_value(catalog).expect("serialize catalog");
+    let proposal = serde_json::to_value(proposal).expect("serialize proposal");
+
+    let report = compile_evidence_report(&spec, &plan, &catalog, Some(&proposal))
+        .expect("compile multilingual report");
+
+    assert_eq!(report.substantive_character_count, 23);
+    assert_eq!(report.claim_support[0].substantive_character_count, 23);
+}
+
+#[test]
 fn a_useful_claim_with_a_material_gap_is_qualified_not_completed() {
     let replay = super::frozen_fixture::load_frozen_replays()
         .into_iter()

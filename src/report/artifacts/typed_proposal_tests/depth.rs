@@ -428,6 +428,54 @@ fn comprehensive_report_requires_cross_source_analysis_not_fact_padding() {
     assert!(report.markdown.contains(IMPLICATION));
     assert!(report.markdown.contains(BOUNDARY));
 
+    let mut transitive = proposal.clone();
+    let claims = transitive["claims"].as_array_mut().expect("claims array");
+    claims
+        .iter_mut()
+        .find(|claim| claim["id"] == "mechanism-analysis")
+        .expect("explanation claim")["basis_claim_ids"] =
+        serde_json::json!(["cross-source-analysis", "fact-three"]);
+    claims
+        .iter_mut()
+        .find(|claim| claim["id"] == "decision-implication")
+        .expect("implication claim")["basis_claim_ids"] =
+        serde_json::json!(["mechanism-analysis"]);
+    let transitive = admit_deep_research_typed_report_proposal_in_language_at(
+        "Assess the migration",
+        "2026-07-24",
+        "en",
+        &catalog,
+        &context,
+        with_narrative(transitive, &context),
+    )
+    .expect("evaluate transitive analytical integration");
+    assert!(
+        transitive.is_some(),
+        "an implication may integrate comparison through its explanation ancestor"
+    );
+
+    let mut disconnected = proposal.clone();
+    let implication = disconnected["claims"]
+        .as_array_mut()
+        .expect("claims array")
+        .iter_mut()
+        .find(|claim| claim["id"] == "decision-implication")
+        .expect("implication claim");
+    implication["basis_claim_ids"] = serde_json::json!(["fact-one", "fact-two"]);
+    let disconnected = admit_deep_research_typed_report_proposal_in_language_at(
+        "Assess the migration",
+        "2026-07-24",
+        "en",
+        &catalog,
+        &context,
+        with_narrative(disconnected, &context),
+    )
+    .expect("evaluate disconnected analytical roles");
+    assert!(
+        disconnected.is_none(),
+        "parallel role labels cannot pass without an implication that integrates comparison and explanation"
+    );
+
     let mut bounded_catalog = catalog;
     for source in &mut bounded_catalog.sources {
         source.coverage.clear();

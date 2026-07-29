@@ -343,6 +343,7 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
                     "challenges_or_boundaries": COMPREHENSIVE_DIMENSION_MIN_CHALLENGES_OR_BOUNDARIES,
                     "independently_attributable_sources": COMPREHENSIVE_DIMENSION_MIN_SOURCES,
                     "cross_source_syntheses": COMPREHENSIVE_DIMENSION_MIN_CROSS_SOURCE_SYNTHESES,
+                    "integrated_analysis_to_implication": true,
                     "substantive_characters": COMPREHENSIVE_DIMENSION_MIN_SUBSTANTIVE_CHARACTERS,
                 })
             } else {
@@ -353,7 +354,7 @@ pub fn deep_research_typed_report_proposal_prompt_in_language_at(
     }))
     .map_err(|error| format!("encode closed typed report packet: {error}"))?;
     let depth = if context.scope == DeepResearchReportScope::Comprehensive {
-        "Cover every material dimension substantively. In each fully resolved material dimension, write exactly one conclusion, at least two atomic evidence facts grounded in at least two independently attributable sources, one cross-source comparison, one explanation of mechanism, causality, trade-off, or competing interpretation, one supported implication, and one challenge or applicability boundary. The comparison must connect at least two factual premises from distinct sources. The explanation must advance beyond describing correlation or repeating the comparison. The challenge or boundary must identify counterevidence, uncertainty, a failure mode, or a condition under which the conclusion would change. Treat all roles as distinct reasoning steps, not paraphrases of one conclusion. Each resolved material dimension must also meet the packet's per-dimension substantive-character threshold using claim prose alone; headings, labels, citations, source entries, and gap text do not count. Preserve useful findings when a dimension is unresolved and return a specific gap for it, but never present an unresolved dimension as a conclusion. If every material dimension is unresolved, return only useful findings and gaps so the Host retains an explicitly incomplete preview. Do not repeat or pad claims to satisfy counts."
+        "Cover every material dimension substantively. In each fully resolved material dimension, write exactly one conclusion, at least two atomic evidence facts grounded in at least two independently attributable sources, one cross-source comparison, one explanation of mechanism, causality, trade-off, or competing interpretation, one supported implication, and one challenge or applicability boundary. The comparison must connect at least two factual premises from distinct sources. The explanation must advance beyond describing correlation or repeating the comparison. At least one implication must descend through basis_claim_ids from both the comparison and the explanation, directly or transitively, so parallel role labels cannot masquerade as an integrated argument. The challenge or boundary must identify counterevidence, uncertainty, a failure mode, or a condition under which the conclusion would change. Treat all roles as distinct reasoning steps, not paraphrases of one conclusion. Each resolved material dimension must also meet the packet's per-dimension substantive-character threshold using claim prose alone; headings, labels, citations, source entries, and gap text do not count. Preserve useful findings when a dimension is unresolved and return a specific gap for it, but never present an unresolved dimension as a conclusion. If every material dimension is unresolved, return only useful findings and gaps so the Host retains an explicitly incomplete preview. Do not repeat or pad claims to satisfy counts."
     } else {
         "Answer the focused request with the smallest sufficient claim graph. One fully supported direct-answer fact is valid; do not invent a second finding merely to satisfy a template."
     };
@@ -908,6 +909,25 @@ fn typed_compiled_dimension_has_required_depth(
                 && claim.source_ids.iter().collect::<HashSet<_>>().len() >= 2
         })
         .count();
+    let claims_by_id = claims
+        .iter()
+        .copied()
+        .map(|claim| (claim.claim_id.as_str(), claim))
+        .collect::<std::collections::HashMap<_, _>>();
+    let has_integrated_implication = claims.iter().any(|claim| {
+        claim.analysis_role
+            == Some(crate::research::compiler::CompilerAnalysisRole::Implication)
+            && typed_claim_has_ancestor_role(
+                claim,
+                &claims_by_id,
+                crate::research::compiler::CompilerAnalysisRole::Comparison,
+            )
+            && typed_claim_has_ancestor_role(
+                claim,
+                &claims_by_id,
+                crate::research::compiler::CompilerAnalysisRole::Explanation,
+            )
+    });
     let substantive_character_count = claims
         .iter()
         .map(|claim| claim.substantive_character_count)
@@ -927,7 +947,36 @@ fn typed_compiled_dimension_has_required_depth(
         ]) >= COMPREHENSIVE_DIMENSION_MIN_CHALLENGES_OR_BOUNDARIES
         && factual_source_count >= COMPREHENSIVE_DIMENSION_MIN_SOURCES
         && cross_source_synthesis_count >= COMPREHENSIVE_DIMENSION_MIN_CROSS_SOURCE_SYNTHESES
+        && has_integrated_implication
         && substantive_character_count >= COMPREHENSIVE_DIMENSION_MIN_SUBSTANTIVE_CHARACTERS
+}
+
+fn typed_claim_has_ancestor_role(
+    claim: &crate::research::compiler::CompilerClaimSupport,
+    claims_by_id: &std::collections::HashMap<
+        &str,
+        &crate::research::compiler::CompilerClaimSupport,
+    >,
+    required_role: crate::research::compiler::CompilerAnalysisRole,
+) -> bool {
+    let mut pending = claim.basis_claim_ids.clone();
+    let mut visited = HashSet::<String>::new();
+    while let Some(claim_id) = pending.pop() {
+        if !visited.insert(claim_id.clone()) {
+            continue;
+        }
+        let Some(ancestor) = claims_by_id.get(claim_id.as_str()).copied() else {
+            continue;
+        };
+        if ancestor.dimension_id != claim.dimension_id {
+            continue;
+        }
+        if ancestor.analysis_role == Some(required_role) {
+            return true;
+        }
+        pending.extend(ancestor.basis_claim_ids.iter().cloned());
+    }
+    false
 }
 
 include!("typed_proposal_validation.rs");

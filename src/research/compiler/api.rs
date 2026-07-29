@@ -220,13 +220,7 @@ pub fn compile_evidence_report(
                 .iter()
                 .flat_map(|dimension| dimension.claims.iter()),
         )
-        .map(|claim| {
-            claim
-                .text
-                .chars()
-                .filter(|character| !character.is_whitespace() && !character.is_control())
-                .count()
-        })
+        .map(|claim| crate::report::report_substantive_character_count(&claim.text))
         .sum();
     let thesis = document
         .direct_answer_claims
@@ -338,11 +332,9 @@ fn document_claim_support(document: &ReportDocument) -> Vec<CompilerClaimSupport
                 super::ClaimAnalysisRole::Implication => CompilerAnalysisRole::Implication,
                 super::ClaimAnalysisRole::Boundary => CompilerAnalysisRole::Boundary,
             }),
-            substantive_character_count: claim
-                .text
-                .chars()
-                .filter(|character| !character.is_whitespace() && !character.is_control())
-                .count(),
+            substantive_character_count: crate::report::report_substantive_character_count(
+                &claim.text,
+            ),
             source_ids: claim
                 .citation_numbers
                 .iter()

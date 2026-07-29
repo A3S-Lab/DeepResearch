@@ -248,6 +248,16 @@ mod report_context_tests {
     use super::*;
 
     #[test]
+    fn substantive_depth_counts_information_bearing_unicode_characters_only() {
+        assert_eq!(report_substantive_character_count("Evidence 2026!"), 12);
+        assert_eq!(report_substantive_character_count("研究，结论。"), 4);
+        assert_eq!(report_substantive_character_count("دليل؟"), 4);
+        assert_eq!(report_substantive_character_count("カナ！"), 2);
+        assert_eq!(report_substantive_character_count("कखग।"), 3);
+        assert_eq!(report_substantive_character_count("！？…—🙂\n\t"), 0);
+    }
+
+    #[test]
     fn report_context_preserves_every_validated_research_track() {
         let tracks = (0..crate::planner::MAX_PLANNER_TRACK_EFFECTS)
             .map(|index| {
@@ -355,8 +365,8 @@ fn deep_research_typed_report_depth_requirements(
     requirements
 }
 
-fn report_substantive_character_count(text: &str) -> usize {
-    text.chars()
-        .filter(|character| !character.is_whitespace() && !character.is_control())
-        .count()
+/// Count Unicode letters and numbers in reader prose while excluding layout,
+/// punctuation, symbols, and control characters from depth thresholds.
+pub(crate) fn report_substantive_character_count(text: &str) -> usize {
+    text.chars().filter(|character| character.is_alphanumeric()).count()
 }

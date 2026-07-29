@@ -106,10 +106,13 @@ with an explicit locale selection may replace it with
   bind planning, report schema, admission, and publication to that exact value
 - **Per-Dimension Depth Gate**: Require every resolved material dimension in a
   comprehensive report to contain a direct answer, two factual findings from
-  distinct sources, a multi-step analytical chain, and an explicit implication
-  or applicability boundary. Only complete material coverage can become a
-  successful `Synthesized` result; any `Qualified` graph remains an explicitly
-  incomplete preview
+  distinct sources, a comparison and explanation that converge through the
+  typed basis graph into an implication, and an explicit challenge or
+  applicability boundary. Depth counts only Unicode letters and numbers in
+  admitted claim prose, so punctuation, layout, citations, and headings cannot
+  pad the threshold. Only complete material coverage can become a successful
+  `Synthesized` result; any `Qualified` graph remains an explicitly incomplete
+  preview
 - **Independent Commercial Review**: After graph admission, require a separate
   editorial generation to review every mapped requirement, dimension, and
   claim for support, depth, temporal status, scope, language, and source-summary
