@@ -45,6 +45,7 @@ mod cancellation;
 mod contract;
 mod event;
 mod execution;
+mod provenance;
 
 pub use cancellation::DeepResearchCancellation;
 pub use contract::{
@@ -52,6 +53,10 @@ pub use contract::{
     MAX_DEEP_RESEARCH_TRACKS,
 };
 pub use event::{DeepResearchEvent, DeepResearchLifecycle, PublicationOutcome};
+pub use provenance::{
+    RetrievalRunProvenanceBindingV1, RetrievalRunProvenanceEnvelopeV1, RetrievalRunProvenanceError,
+    RETRIEVAL_RUN_PROVENANCE_METADATA_KEY, RETRIEVAL_RUN_PROVENANCE_V1_SCHEMA,
+};
 
 /// Default execution limits for one progressively publishable research run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use super::provenance::workflow_retrieval_provenance_audit;
 use super::{
     DeepResearchCancellation, DeepResearchEngine, DeepResearchEngineError, DeepResearchEvent,
     DeepResearchLifecycle, DeepResearchRequest, DeepResearchResult, DeepResearchRun,
@@ -134,6 +135,7 @@ impl DeepResearchEngine<'_> {
             .and_then(Value::as_str)
             .filter(|run_id| !run_id.trim().is_empty())
             .unwrap_or("unassigned");
+        let mut retrieval_provenance_audits = Vec::new();
 
         ensure_not_cancelled(cancellation)?;
         self.progress(
@@ -197,6 +199,11 @@ impl DeepResearchEngine<'_> {
         ) = match bootstrap {
             Ok(result) => {
                 let metadata = result.metadata;
+                if let Some(audit) =
+                    workflow_retrieval_provenance_audit(metadata.as_ref(), "bootstrap")
+                {
+                    retrieval_provenance_audits.push(audit);
+                }
                 let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
                 match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
                     Ok(catalog) => {
@@ -283,6 +290,11 @@ impl DeepResearchEngine<'_> {
             match planned_retrieval {
                 Ok(result) => {
                     let metadata = result.metadata;
+                    if let Some(audit) =
+                        workflow_retrieval_provenance_audit(metadata.as_ref(), "planned_retrieval")
+                    {
+                        retrieval_provenance_audits.push(audit);
+                    }
                     let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
                     match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
                         Ok(catalog) => {
@@ -805,7 +817,7 @@ impl DeepResearchEngine<'_> {
             relevant_source_count,
             source_count: catalog.as_ref().map_or(0, |catalog| catalog.sources.len()),
         };
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "query": query,
             "output_language": output_language,
             "mode": "evidence_first_report",
@@ -877,6 +889,10 @@ impl DeepResearchEngine<'_> {
                     * required_model_generation_count,
             }
         });
+        if !retrieval_provenance_audits.is_empty() {
+            output["execution"]["retrieval_run_provenance"] =
+                Value::Array(retrieval_provenance_audits);
+        }
         Ok(DeepResearchRun {
             output,
             artifacts,

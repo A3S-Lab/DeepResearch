@@ -200,6 +200,37 @@ provider outage or exhausted quota can trigger another provider without
 changing the evidence contract: fallback bytes still require the same semantic
 admission as bytes from the preferred provider.
 
+`WorkflowExecutionPort` adapters may attach a bounded
+`RetrievalRunProvenanceEnvelopeV1` under the reserved top-level
+`WorkflowOutput.metadata["retrieval_run_provenance"]` key. The adapter must
+first validate each producer receipt against its returned output and retain the
+complete receipt plus the verification material required by that producer. The
+`receipt_sha256` field records the producer-defined canonical complete-receipt
+binding; it is not required to hash the receipt's JSON representation. For a
+Search cascade, map `outcome.receipt_binding()?.sha256` to
+`receipt_sha256`, the typed `SearchQuery` binding to `request_sha256`, and the
+complete ordered `SearchResults` binding to `output_sha256`. The quality floor
+and declared tier plan are covered by the complete receipt binding, not by the
+SearchQuery binding. DeepResearch does not depend on the Search crate or
+inspect tier/provider names. The engine shape-validates and carries this
+adapter assertion in terminal
+`execution.retrieval_run_provenance` audit metadata. The top-level key is
+host-reserved by convention, not a cryptographically separate channel; nested
+tool metadata is ignored, and an invalid optional envelope is recorded as
+rejected.
+
+Retrieval provenance is deliberately excluded from planning, evidence
+admission, report generation, and publication-quality calculations. A
+shape-valid envelope states only which retrieval output the adapter says it
+validated. It does not make a source relevant, fetched, independent, primary,
+claim-eligible, or sufficient for publication, and it does not establish
+external authenticity unless an independent authority authenticates the
+producer-defined complete-receipt binding, for example by signing or
+append-only logging `receipt_sha256`. A failed `WorkflowExecutionPort` call
+returns no `WorkflowOutput`, so durable provenance for failed attempts must
+remain in the adapter's external append-only attempt log rather than this
+optional successful-output channel.
+
 ## Engine Model
 
 Bootstrap retrieval and semantic planning begin together. Planning may define

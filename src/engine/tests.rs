@@ -48,6 +48,7 @@ struct FakeRuntime {
     events: Mutex<Vec<DeepResearchEvent>>,
     bootstrap_signal: Mutex<Option<oneshot::Sender<()>>>,
     planner_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    planned_retrieval_failure: Mutex<Option<String>>,
     synthesized_publication_failure: Mutex<Option<String>>,
 }
 
@@ -78,8 +79,17 @@ impl FakeRuntime {
             events: Mutex::new(Vec::new()),
             bootstrap_signal: Mutex::new(Some(bootstrap_signal)),
             planner_gate: Mutex::new(Some(planner_gate)),
+            planned_retrieval_failure: Mutex::new(None),
             synthesized_publication_failure: Mutex::new(None),
         }
+    }
+
+    fn fail_planned_retrieval(self, message: impl Into<String>) -> Self {
+        *self
+            .planned_retrieval_failure
+            .lock()
+            .expect("planned retrieval failure lock") = Some(message.into());
+        self
     }
 
     fn fail_synthesized_publication(self, message: impl Into<String>) -> Self {
@@ -195,7 +205,18 @@ impl WorkflowExecutionPort for FakeRuntime {
                 }
                 Ok(self.bootstrap.clone())
             }
-            WorkflowStage::PlannedRetrieval => Ok(self.planned.clone()),
+            WorkflowStage::PlannedRetrieval => {
+                if let Some(error) = self
+                    .planned_retrieval_failure
+                    .lock()
+                    .expect("planned retrieval failure lock")
+                    .take()
+                {
+                    Err(error)
+                } else {
+                    Ok(self.planned.clone())
+                }
+            }
         }
     }
 }
@@ -568,6 +589,27 @@ fn empty_bootstrap_output(query: &str) -> WorkflowOutput {
         .to_string(),
         metadata: None,
     }
+}
+
+fn with_retrieval_provenance(
+    mut output: WorkflowOutput,
+    receipt_character: char,
+) -> WorkflowOutput {
+    let digest = |character| std::iter::repeat_n(character, 64).collect::<String>();
+    let binding = RetrievalRunProvenanceBindingV1::new(
+        "a3s/search-cascade-receipt/v1",
+        digest(receipt_character),
+        digest('b'),
+        digest('c'),
+    )
+    .expect("valid retrieval provenance binding");
+    let envelope = RetrievalRunProvenanceEnvelopeV1::new(vec![binding])
+        .expect("valid retrieval provenance envelope");
+    let metadata = output.metadata.get_or_insert_with(|| serde_json::json!({}));
+    envelope
+        .insert_into_metadata(metadata)
+        .expect("host metadata object");
+    output
 }
 
 fn empty_planned_output(query: &str) -> WorkflowOutput {
