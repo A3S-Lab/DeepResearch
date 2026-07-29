@@ -191,11 +191,16 @@ pub fn host_fallback_plan(workflow_args: &Value) -> Result<PlannedInquiry, Strin
         // evidence contract instead of authorizing an undated final answer.
         "freshness_required": true,
         "workspace_evidence_required": workspace_evidence_required,
+        "request_requirements": [{
+            "id": "request.primary",
+            "text": criterion.clone(),
+        }],
         "tracks": [{
             "id": "request.primary",
             "title": bounded_fallback_text(query, 160),
             "focus": focus,
             "material": true,
+            "requirement_ids": ["request.primary"],
             "questions": [criterion.clone()],
             "completion_criteria": [criterion],
             "evidence_requirements": {
@@ -309,6 +314,17 @@ fn semantic_outline_matches_output_language(outline: &Value, output_language: &s
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    for requirement in outline
+        .get("request_requirements")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(value) = requirement.get("text").and_then(Value::as_str) {
+            reader_text.push('\n');
+            reader_text.push_str(value);
+        }
+    }
     for track in outline
         .get("tracks")
         .and_then(Value::as_array)
@@ -378,6 +394,13 @@ fn validated_semantic_search_queries(
 ) -> Result<Vec<String>, String> {
     let mut queries = vec![exact_query.to_string()];
     for query in supplemental_queries {
+        let query = portable_search_query(&query);
+        if query.is_empty() {
+            return Err(
+                "DeepResearch semantic planner returned an empty portable search query"
+                    .to_string(),
+            );
+        }
         if query == exact_query {
             return Err(
                 "DeepResearch semantic planner repeated the exact query as a supplement"
@@ -396,6 +419,22 @@ fn validated_semantic_search_queries(
         queries.push(query);
     }
     Ok(queries)
+}
+
+fn portable_search_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|token| {
+            token
+                .split_once(':')
+                .filter(|(operator, value)| {
+                    operator.eq_ignore_ascii_case("site") && !value.is_empty()
+                })
+                .map_or(token, |(_, value)| value)
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn query_is_standalone_url(query: &str) -> bool {
@@ -552,4 +591,49 @@ fn required_text<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a st
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("DeepResearch plan omitted non-empty `{key}`"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_query_normalization_is_transport_only_and_subject_invariant() {
+        for (query, expected) in [
+            (
+                "site:standards.example protocol conformance record",
+                "standards.example protocol conformance record",
+            ),
+            (
+                "SITE:public-health.example clinical guidance revision",
+                "public-health.example clinical guidance revision",
+            ),
+            (
+                "grid operator capacity outlook",
+                "grid operator capacity outlook",
+            ),
+        ] {
+            assert_eq!(portable_search_query(query), expected);
+        }
+    }
+
+    #[test]
+    fn normalized_search_queries_remain_unique_and_keep_exact_query_authority() {
+        let queries = validated_semantic_search_queries(
+            "Compare the current records",
+            vec!["site:records.example current policy".to_string()],
+        )
+        .expect("portable search query");
+        assert_eq!(queries[0], "Compare the current records");
+        assert_eq!(queries[1], "records.example current policy");
+
+        assert!(validated_semantic_search_queries(
+            "Compare the current records",
+            vec![
+                "site:records.example current policy".to_string(),
+                "records.example current policy".to_string(),
+            ],
+        )
+        .is_err());
+    }
 }

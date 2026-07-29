@@ -23,6 +23,14 @@ pub enum PublicationOutcome {
     NoEvidence,
 }
 
+impl PublicationOutcome {
+    /// Only a fully synthesized result has passed the terminal commercial
+    /// quality gate. Other outcomes remain inspectable previews.
+    pub const fn is_complete(self) -> bool {
+        matches!(self, Self::Synthesized)
+    }
+}
+
 impl From<DeepResearchEvidenceFirstPublication> for PublicationOutcome {
     fn from(publication: DeepResearchEvidenceFirstPublication) -> Self {
         match publication {

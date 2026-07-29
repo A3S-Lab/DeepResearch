@@ -201,3 +201,65 @@
       }),
     };
   };
+
+  const materializedSourceCoverage = (selection) =>
+    (Array.isArray(selection && selection.results) ? selection.results : [])
+      .flatMap((result) => {
+        const structured = object(result && result.structured);
+        return Array.isArray(structured.source_coverage)
+          ? structured.source_coverage
+          : [];
+      });
+
+  const materializedSourceCount = (selection) => new Set(
+    (Array.isArray(selection && selection.results) ? selection.results : [])
+      .flatMap((result) => {
+        const structured = object(result && result.structured);
+        return Array.isArray(structured.sources) ? structured.sources : [];
+      })
+      .map((source) => String(source && source.source_id || ""))
+      .filter(nonEmpty)
+  ).size;
+
+  const researchResult = (selection) => {
+    const results = Array.isArray(selection.results) ? selection.results : [];
+    const errors = Array.isArray(selection.errors) ? selection.errors : [];
+    const status = selection.status === "success"
+      ? "success"
+      : (results.length > 0 ? "incomplete" : "failed");
+    return {
+      tool: "web_search/web_fetch/read",
+      algorithm:
+        "plan_discover_semantic_admit_retrieve_typed_coverage_supplement",
+      status,
+      metadata: Object.assign({}, object(selection.metadata), {
+        result_count: results.length,
+        source_count: results.reduce(
+          (total, result) =>
+            total + (
+              result && result.structured && Array.isArray(result.structured.sources)
+                ? result.structured.sources.length
+                : 0
+            ),
+          0
+        ),
+        evidence_selection_mode: "semantic_chunk_ids_with_typed_coverage",
+      }),
+      results,
+      warnings: errors.length > 0
+        ? { collection_errors: errors }
+        : undefined,
+    };
+  };
+
+  const initialRetrievalCheckpointOutput = (query, plan, selection) => ({
+    query,
+    mode: "inquiry_collection",
+    plan,
+    research: researchResult(selection),
+    execution: {
+      mode: "collect_only",
+      terminal_authority: "host_inquiry_reducer",
+      note: "The initial closed-evidence portfolio was durably checkpointed before the optional supplemental pass. Closed-evidence review and convergence remain host-owned.",
+    },
+  });

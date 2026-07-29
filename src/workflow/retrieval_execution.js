@@ -1,3 +1,23 @@
+  const generationStepLabel = (stepId) => {
+    const id = String(stepId || "");
+    if (id === STEP_SELECT_WEB || id.startsWith(STEP_SELECT_WEB_SHARD_PREFIX)) {
+      return "Semantic web source selection";
+    }
+    if (
+      id === STEP_SELECT_SUPPLEMENTAL_WEB ||
+      id.startsWith(`${STEP_SELECT_SUPPLEMENTAL_WEB}_`)
+    ) {
+      return "Semantic supplemental web source selection";
+    }
+    if (
+      id === STEP_GENERATE_GAP_QUERIES ||
+      id.startsWith(`${STEP_GENERATE_GAP_QUERIES}_`)
+    ) {
+      return "Typed gap-query generation";
+    }
+    return "Semantic chunk selection";
+  };
+
   if (inputs.kind === "step") {
     if (inputs.step_name === STEP_DISCOVER_WEB) {
       return await discoverWeb(object(inputs.input));
@@ -16,9 +36,7 @@
       if (exitCode !== 0) {
         const diagnostic = bounded(result && result.output, 600) ||
           "generate_object returned no diagnostic";
-        const stage = inputs.step_id === STEP_SELECT_WEB
-          ? "Semantic web source selection"
-          : "Semantic chunk selection";
+        const stage = generationStepLabel(inputs.step_id);
         throw new Error(
           `${stage} failed with exit code ${exitCode}: ${diagnostic}`
         );
@@ -41,6 +59,30 @@
   const needsWeb = scope === "web_and_workspace";
   const needsLocal = scope === "local_only" ||
     plan.workspace_evidence_required === true;
+  const supplementalFetchBudget = needsWeb
+    ? clamp(
+        object(object(input.loop_contract).hard_caps).max_supplemental_fetches,
+        0,
+        MAX_CATALOG_SOURCES,
+        0
+      )
+    : 0;
+  const gapRoundCount = needsWeb
+    ? clamp(
+        object(object(input.loop_contract).cardinality).gap_extractions,
+        0,
+        MAX_GAP_ROUNDS,
+        0
+      )
+    : 0;
+  const gapSearchBudget = needsWeb
+    ? clamp(
+        object(object(input.loop_contract).hard_caps).max_gap_searches,
+        0,
+        MAX_SEARCH_QUERIES * gapRoundCount,
+        0
+      )
+    : 0;
   const outputs = object(inputs.step_outputs);
   const failures = object(inputs.step_failures);
   const retrievalRetry = {
@@ -54,11 +96,11 @@
     on_exhausted: "continue_workflow",
   };
   const webSourceSelectionRetry = {
-    max_attempts: 2,
-    delay_ms: 100,
+    max_attempts: 1,
+    delay_ms: 0,
     on_exhausted: "continue_workflow",
   };
-  const bootstrapWebSourceSelectionRetry = {
+  const gapQueryGenerationRetry = {
     max_attempts: 1,
     delay_ms: 0,
     on_exhausted: "continue_workflow",
@@ -104,33 +146,8 @@
           metadata: {},
         })
       : null;
-    const bootstrapCandidates = Array.isArray(
-      bootstrapDiscovery && bootstrapDiscovery.candidates
-    ) ? bootstrapDiscovery.candidates : [];
-    const bootstrapNeedsSelection = needsWeb && bootstrapCandidates.length > 0;
-    if (
-      bootstrapNeedsSelection &&
-      !outputs[STEP_SELECT_WEB] &&
-      !failures[STEP_SELECT_WEB]
-    ) {
-      return {
-        type: "schedule_step",
-        step_id: STEP_SELECT_WEB,
-        step_name: "generate_object",
-        input: webSourceSelectorInput(plan, bootstrapDiscovery),
-        retry: bootstrapWebSourceSelectionRetry,
-      };
-    }
-    const bootstrapSelectorFailure = failures[STEP_SELECT_WEB] &&
-      (failures[STEP_SELECT_WEB].error ||
-        "bootstrap semantic web source admission failed");
     const bootstrapSelection = needsWeb
-      ? selectedWebCandidates(
-          plan,
-          bootstrapDiscovery,
-          structuredOutput(outputs[STEP_SELECT_WEB]),
-          bootstrapSelectorFailure
-        )
+      ? boundedDiscoveryFallback(plan, bootstrapDiscovery, "")
       : { candidates: [], mode: "none", error: "" };
     const bootstrapWebSteps = webSourceFetchSteps(
       STEP_WEB_SOURCE_PREFIX,
@@ -138,7 +155,8 @@
       bootstrapSelection.candidates,
       "bootstrap-web-source",
       20,
-      retrievalRetry
+      retrievalRetry,
+      true
     );
     const pendingBootstrapWebSteps = bootstrapWebSteps.filter((step) =>
       !outputs[step.step_id] && !failures[step.step_id]
@@ -174,7 +192,6 @@
             ...(Array.isArray(bootstrapDiscovery.errors)
               ? bootstrapDiscovery.errors
               : []),
-            bootstrapSelectorFailure || "",
             bootstrapSelection.error || "",
           ]),
           discovery_metadata: object(bootstrapDiscovery.metadata),
@@ -308,8 +325,61 @@
   const needsWebSourceSelection =
     hasPlannedWebDiscovery && fetchLimit > 0 &&
     discoveryCandidatesList.length > 0;
+  const directWebSelectorInput = needsWebSourceSelection
+    ? webSourceSelectorInput(plan, webDiscovery)
+    : null;
+  const webSourceShardEntries = needsWebSourceSelection
+    ? sourceSelectionShardEntries(
+        discoveryCandidatesList,
+        fetchLimit,
+        STEP_SELECT_WEB_SHARD_PREFIX
+      )
+    : [];
+  if (webSourceShardEntries.length > 0) {
+    const pendingShardSteps = webSourceShardEntries
+      .map((entry) => ({
+        step_id: entry.step_id,
+        step_name: "generate_object",
+        input: webSourceSelectorInput(
+          plan,
+          { candidates: entry.candidates },
+          { fetch_limit: entry.selection_limit }
+        ),
+        retry: webSourceSelectionRetry,
+      }))
+      .filter((step) =>
+        !outputs[step.step_id] && !failures[step.step_id]
+      );
+    if (pendingShardSteps.length > 0) {
+      return { type: "schedule_steps", steps: pendingShardSteps };
+    }
+  }
+  const webSourceShardUnion = webSourceShardEntries.length > 0
+    ? sourceSelectionShardUnion(
+        webSourceShardEntries,
+        outputs,
+        failures,
+        (entry, error) => boundedDiscoveryFallback(
+          Object.assign({}, plan, {
+            budget: Object.assign({}, object(plan.budget), {
+              direct_fetches: entry.selection_limit,
+            }),
+          }),
+          { candidates: entry.candidates },
+          error,
+          entry.selection_limit
+        )
+      )
+    : null;
+  const webReductionDiscovery = webSourceShardUnion
+    ? { candidates: webSourceShardUnion.candidates }
+    : webDiscovery;
+  const needsWebSourceReduction = Boolean(
+    webSourceShardUnion && webSourceShardUnion.candidates.length > fetchLimit
+  );
   if (
     needsWebSourceSelection &&
+    (webSourceShardEntries.length === 0 || needsWebSourceReduction) &&
     !outputs[STEP_SELECT_WEB] &&
     !failures[STEP_SELECT_WEB]
   ) {
@@ -317,28 +387,66 @@
       type: "schedule_step",
       step_id: STEP_SELECT_WEB,
       step_name: "generate_object",
-      input: webSourceSelectorInput(plan, webDiscovery),
+      input: needsWebSourceReduction
+        ? webSourceSelectorInput(plan, webReductionDiscovery)
+        : directWebSelectorInput,
       retry: webSourceSelectionRetry,
     };
   }
   const webSourceSelectorFailure = failures[STEP_SELECT_WEB] &&
     (failures[STEP_SELECT_WEB].error ||
       "semantic web source selection failed");
-  const webSourceSelection = hasPlannedWebDiscovery
-    ? selectedWebCandidates(
-        plan,
-        webDiscovery,
-        structuredOutput(outputs[STEP_SELECT_WEB]),
-        webSourceSelectorFailure
-      )
-    : { candidates: [], mode: "none", error: "" };
+  let webSourceSelection = { candidates: [], mode: "none", error: "" };
+  if (hasPlannedWebDiscovery && webSourceShardUnion) {
+    if (needsWebSourceReduction) {
+      const semanticReduction = webSourceSelectorFailure
+        ? { candidates: [], error: webSourceSelectorFailure }
+        : closedCandidateSelection(
+            webSourceShardUnion.candidates,
+            structuredOutput(outputs[STEP_SELECT_WEB]),
+            fetchLimit
+          );
+      if (semanticReduction.error) {
+        webSourceSelection = boundedDiscoveryFallback(
+          plan,
+          webReductionDiscovery,
+          semanticReduction.error,
+          fetchLimit
+        );
+      } else {
+        webSourceSelection = {
+          candidates: semanticReduction.candidates,
+          mode: webSourceShardUnion.fallback_count > 0
+            ? "bounded_discovery_fallback"
+            : "semantic_candidate_shards",
+          error: uniqueStrings(webSourceShardUnion.errors).join(" "),
+        };
+      }
+    } else {
+      webSourceSelection = {
+        candidates: webSourceShardUnion.candidates,
+        mode: webSourceShardUnion.fallback_count > 0
+          ? "bounded_discovery_fallback"
+          : "semantic_candidate_shards",
+        error: uniqueStrings(webSourceShardUnion.errors).join(" "),
+      };
+    }
+  } else if (hasPlannedWebDiscovery) {
+    webSourceSelection = selectedWebCandidates(
+      plan,
+      webDiscovery,
+      structuredOutput(outputs[STEP_SELECT_WEB]),
+      webSourceSelectorFailure
+    );
+  }
   const plannedWebSteps = webSourceFetchSteps(
     STEP_WEB_SOURCE_PREFIX,
     plan,
     webSourceSelection.candidates,
     "web-source",
     20,
-    retrievalRetry
+    retrievalRetry,
+    webSourceSelection.mode === "bounded_discovery_fallback"
   );
   const pendingPlannedWebSteps = plannedWebSteps.filter((step) =>
     !outputs[step.step_id] && !failures[step.step_id]
@@ -545,20 +653,6 @@
         source_relevance: sourceReduction.source_relevance,
       }
     : structuredOutput(outputs[STEP_SELECT]);
-  const supplementalRound = supplementalCoverageRound({
-    plan,
-    needs_web: needsWeb,
-    web_discovery: webDiscovery,
-    initial_candidates: webSourceSelection.candidates,
-    packet,
-    semantic_selection: semanticSelection,
-    outputs,
-    failures,
-    retrieval_retry: retrievalRetry,
-    semantic_web_selection_retry: webSourceSelectionRetry,
-    semantic_selection_retry: semanticSelectionRetry,
-    semantic_shard_selection_retry: semanticShardSelectionRetry,
-  });
   const primarySelection = materializeEvidence(
     packet,
     semanticSelection,
@@ -593,7 +687,10 @@
     object(primarySelection.metadata),
     {
       retrieval_pass_count: 1,
-      typed_coverage_gap_count: supplementalRound.coverage_gaps.length,
+      typed_coverage_gap_count: typedCoverageGaps(
+        plan,
+        materializedSourceCoverage(primarySelection)
+      ).length,
     }
   );
   const initialCheckpointOutput = initialRetrievalCheckpointOutput(
@@ -613,16 +710,128 @@
       retry: retrievalRetry,
     };
   }
-  if (supplementalRound.schedule) {
-    return supplementalRound.schedule;
+  let selection = primarySelection;
+  let roundPlan = plan;
+  let supplementalAttempted = false;
+  let supplementalRoundCount = 0;
+  let supplementalFetchCount = 0;
+  let generatedGapQueryCount = 0;
+  const initialMaterializedSourceCount = materializedSourceCount(selection);
+  const excludedCandidates = [
+    ...(Array.isArray(webSourceSelection.candidates)
+      ? webSourceSelection.candidates
+      : []),
+  ];
+  for (let round = 1; round <= gapRoundCount; round += 1) {
+    const coverageBindings = materializedSourceCoverage(selection);
+    if (typedCoverageGaps(plan, coverageBindings).length === 0) {
+      break;
+    }
+    const remainingRounds = gapRoundCount - round + 1;
+    const remainingFetchBudget = Math.max(
+      0,
+      supplementalFetchBudget - supplementalFetchCount
+    );
+    const remainingQueryBudget = Math.max(
+      0,
+      gapSearchBudget - generatedGapQueryCount
+    );
+    const remainingSourceSlots = Math.max(
+      0,
+      MAX_CATALOG_SOURCES - materializedSourceCount(selection)
+    );
+    if (remainingFetchBudget === 0 || remainingSourceSlots === 0) {
+      break;
+    }
+    const roundFetchBudget = Math.min(
+      MAX_SOURCES,
+      remainingSourceSlots,
+      Math.ceil(remainingFetchBudget / remainingRounds)
+    );
+    const roundQueryBudget = Math.min(
+      MAX_SEARCH_QUERIES,
+      Math.ceil(remainingQueryBudget / remainingRounds)
+    );
+    const supplementalRound = supplementalCoverageRound({
+      round,
+      enabled: true,
+      fetch_budget: roundFetchBudget,
+      query_budget: roundQueryBudget,
+      query,
+      plan: roundPlan,
+      needs_web: needsWeb,
+      web_discovery: round === 1 ? webDiscovery : { candidates: [] },
+      initial_candidates: round === 1
+        ? webSourceSelection.candidates
+        : [],
+      excluded_candidates: excludedCandidates,
+      packet: round === 1 ? packet : null,
+      semantic_selection: round === 1 ? semanticSelection : null,
+      coverage_bindings: coverageBindings,
+      outputs,
+      failures,
+      retrieval_retry: retrievalRetry,
+      gap_query_generation_retry: gapQueryGenerationRetry,
+      semantic_web_selection_retry: webSourceSelectionRetry,
+      semantic_selection_retry: semanticSelectionRetry,
+      semantic_shard_selection_retry: semanticShardSelectionRetry,
+    });
+    if (supplementalRound.schedule) {
+      return supplementalRound.schedule;
+    }
+    if (!supplementalRound.attempted) {
+      break;
+    }
+    supplementalAttempted = true;
+    supplementalRoundCount += 1;
+    supplementalFetchCount += Number(supplementalRound.fetch_count || 0);
+    generatedGapQueryCount += Number(supplementalRound.query_count || 0);
+    excludedCandidates.push(...(
+      Array.isArray(supplementalRound.attempted_candidates)
+        ? supplementalRound.attempted_candidates
+        : []
+    ));
+    selection = combineMaterializedSelections(
+      selection,
+      supplementalRound.selection
+    );
+    const stepIds = supplementalRoundStepIds(round);
+    const roundGapQueries = Array.isArray(supplementalRound.queries)
+      ? supplementalRound.queries
+      : validatedGapQueries(
+          roundPlan,
+          structuredOutput(outputs[stepIds.generate_gap_queries]),
+          roundQueryBudget
+        ).queries;
+    roundPlan = Object.assign({}, roundPlan, {
+      search_queries: uniqueStrings([
+        ...(Array.isArray(roundPlan.search_queries)
+          ? roundPlan.search_queries
+          : []),
+        ...roundGapQueries,
+      ]),
+    });
+    if (
+      Number(supplementalRound.fetch_count || 0) === 0 &&
+      Number(supplementalRound.query_count || 0) === 0
+    ) {
+      break;
+    }
   }
-  const selection = combineMaterializedSelections(
-    primarySelection,
-    supplementalRound.selection
+  const finalCoverageGaps = typedCoverageGaps(
+    plan,
+    materializedSourceCoverage(selection)
   );
   selection.metadata = Object.assign({}, object(selection.metadata), {
-    typed_coverage_gap_count: supplementalRound.coverage_gaps.length,
-    supplemental_retrieval_attempted: supplementalRound.attempted,
+    typed_coverage_gap_count: finalCoverageGaps.length,
+    supplemental_retrieval_attempted: supplementalAttempted,
+    supplemental_retrieval_round_count: supplementalRoundCount,
+    supplemental_fetch_count: supplementalFetchCount,
+    supplemental_source_count: Math.max(
+      0,
+      materializedSourceCount(selection) - initialMaterializedSourceCount
+    ),
+    generated_gap_query_count: generatedGapQueryCount,
   });
   const research = researchResult(selection);
   return {
@@ -635,8 +844,8 @@
       execution: {
         mode: "collect_only",
         terminal_authority: "host_inquiry_reducer",
-        note: supplementalRound.attempted
-          ? "The host-planned retrieval pass and one typed-coverage supplemental pass completed. Closed-evidence review and convergence remain host-owned."
+        note: supplementalAttempted
+          ? `The host-planned retrieval pass and up to ${gapRoundCount} coverage-directed supplemental passes completed. Closed-evidence review and convergence remain host-owned.`
           : "The host-planned retrieval pass completed without a runnable typed-coverage supplement. Closed-evidence review and convergence remain host-owned.",
       },
     },

@@ -1,26 +1,53 @@
 async function run(ctx, inputs) {
-  const MAX_SOURCES = 12;
-  const MAX_CATALOG_SOURCES = 16;
+  const MAX_SOURCES = 24;
+  const MAX_CATALOG_SOURCES = 32;
   const MAX_PLANNER_COMPLETION_CRITERIA = 3;
-  const MAX_SEARCH_QUERIES = 8;
+  const MAX_RESEARCH_FOCUSES = Math.floor(
+    MAX_SOURCES / MAX_PLANNER_COMPLETION_CRITERIA
+  );
+  const MAX_SEARCH_QUERIES = 16;
+  const MAX_GAP_ROUNDS = 4;
   const MAX_RESULTS_PER_SEARCH = 16;
+  const MAX_PROVIDER_FULL_TEXT_BYTES = 8 * 1024;
+  const MAX_PROVIDER_TEXT_CHARS = MAX_PROVIDER_FULL_TEXT_BYTES;
   const MAX_SEED_URLS = 3;
   const MAX_DISCOVERY_CANDIDATES =
     MAX_SEARCH_QUERIES * MAX_RESULTS_PER_SEARCH + MAX_SEED_URLS;
   // Keep a complete bounded catalog without positional sampling. Source-aware
   // selector packets below keep every admitted chunk inside the generation
   // transport limit before the existing exact-ID reduction pass.
-  const MAX_CHUNKS = 1280;
+  // Raw catalogs are reduced through byte-bounded selector shards before any
+  // excerpt reaches synthesis. Keep a power-of-two aggregate fuse large
+  // enough for the complete bounded source catalog instead of coupling it to
+  // the older four-focus acquisition shape.
+  const MAX_CHUNKS = 2048;
   const MAX_CHUNK_CHARS = 700;
+  // Candidate admission becomes materially less reliable before the
+  // transport's hard 128 KiB ceiling. Preserve every candidate identity while
+  // reducing discovery metadata early enough to keep semantic source
+  // selection inside the empirically stable generation envelope.
+  const MAX_GENERATION_PROMPT_BYTES = 64 * 1024;
+  // Source admission uses smaller complete candidate shards once one prompt
+  // crosses the latency envelope observed to finish reliably. Each shard
+  // retains full closed identities, and a small second-stage selector reduces
+  // their semantic union to the transport budget.
+  const MAX_WEB_SOURCE_SELECTOR_SHARD_CANDIDATES = 24;
+  const WEB_SOURCE_SELECTOR_OVERSAMPLE_FACTOR = 2;
   // Small catalogs use one direct selector. Larger catalogs first split each
   // source into complete byte-bounded units, then pack units from distinct
   // sources together. A large source may span packets, while the later exact-ID
   // source reduction still chooses its strongest excerpts across every unit.
   const MAX_DIRECT_SELECTOR_CHUNKS = 10;
   const MAX_SELECTOR_SHARD_CANDIDATES = 4;
-  // Leave room for the selector instructions inside the runtime's 128 KiB
-  // prompt ceiling; this limit applies only to the serialized packet.
-  const MAX_SELECTOR_SHARD_PACKET_BYTES = 112 * 1024;
+  // Use most of the safe prompt envelope on the normal path, but cap the
+  // number of independently judged sources so schema cardinality does not
+  // grow with a dense catalog. A failed optimistic shard is repartitioned
+  // losslessly into the smaller recovery envelope below. This keeps complete
+  // source text review practical without making one large generation the only
+  // way to retain evidence.
+  const MAX_SELECTOR_SHARD_PACKET_BYTES = 96 * 1024;
+  const MAX_SELECTOR_RECOVERY_PACKET_BYTES = 32 * 1024;
+  const MAX_SELECTOR_SHARD_SOURCES = 4;
   const MAX_EXCERPTS_PER_SOURCE = 4;
   const MAX_EXCERPT_CHARS_PER_SOURCE = 2800;
   const MAX_DOCUMENT_RANGES = 3;
@@ -28,12 +55,17 @@ async function run(ctx, inputs) {
   const MAX_LOCAL_SOURCES = 8;
   const MAX_LOCAL_RANGES = 3;
   const MAX_LOCAL_RANGE_LINES = 240;
-  // Candidate admission happens before any URL is fetched. Bound that one
-  // cross-source decision independently so it cannot consume the complete
-  // 150-second acquisition stage and starve transport. Closed fetched-text
-  // selection keeps the longer active window below because it runs after raw
-  // acquisition has already been durably checkpointed.
-  const WEB_SOURCE_SELECTION_ACTIVE_TIMEOUT_MS = 60_000;
+  // Planned and supplemental candidate catalogs can contain every result from
+  // the bounded query set. Give one failover-aware admission enough active
+  // time to judge that complete catalog, while keeping exactly one outer
+  // attempt. Bootstrap acquisition does not use this model-backed selector;
+  // it deterministically fetches a small provenance-balanced candidate set.
+  const WEB_SOURCE_SELECTION_ACTIVE_TIMEOUT_MS = 180_000;
+  // Gap-query packets can carry every unresolved atomic criterion and are
+  // materially larger than candidate-ID selectors. Give one failover-aware
+  // generation enough active time without multiplying the retrieval stage by
+  // an outer retry of the same request.
+  const GAP_QUERY_GENERATION_ACTIVE_TIMEOUT_MS = 180_000;
   const MODEL_GENERATION_ACTIVE_TIMEOUT_MS = 300_000;
   // A real primary-source selector exceeded 210 seconds. Keep exactly one
   // attempt so a slow source cannot starve later siblings, but allow the same
@@ -41,6 +73,7 @@ async function run(ctx, inputs) {
   const MODEL_GENERATION_SHARD_ACTIVE_TIMEOUT_MS = 270_000;
   const STEP_DISCOVER_WEB = "discover_web_sources";
   const STEP_SELECT_WEB = "select_web_sources";
+  const STEP_SELECT_WEB_SHARD_PREFIX = "select_web_sources_shard_";
   const STEP_WEB_SOURCE = "retrieve_web_source";
   const STEP_WEB_SOURCE_PREFIX = "retrieve_web_source_";
   const STEP_LOCAL = "retrieve_local";
@@ -52,6 +85,10 @@ async function run(ctx, inputs) {
   const STEP_CHECKPOINT_BOOTSTRAP = "checkpoint_bootstrap_acquisition";
   const STEP_CHECKPOINT_INITIAL = "checkpoint_initial_retrieval";
   const STEP_SELECT_SUPPLEMENTAL_WEB = "select_supplemental_web_sources";
+  const STEP_SELECT_SUPPLEMENTAL_WEB_SHARD_PREFIX =
+    "select_supplemental_web_sources_shard_";
+  const STEP_GENERATE_GAP_QUERIES = "generate_gap_queries";
+  const STEP_DISCOVER_GAP_WEB = "discover_gap_web_sources";
   const STEP_SUPPLEMENTAL_WEB_SOURCE_PREFIX =
     "retrieve_supplemental_web_source_";
   const STEP_SELECT_SUPPLEMENTAL = "select_supplemental_evidence_chunks";
@@ -78,6 +115,24 @@ async function run(ctx, inputs) {
       ? compact
       : `${characters.slice(0, Math.max(0, maximum - 1)).join("")}…`;
   };
+  const boundedText = (value, maximum) => {
+    const text = String(value || "")
+      .replace(/\u0000/g, "")
+      .replace(/\r\n?/g, "\n")
+      .trim();
+    const characters = Array.from(text);
+    return characters.length <= maximum
+      ? text
+      : characters.slice(0, maximum).join("");
+  };
+  const portableSearchQuery = (value) =>
+    String(value || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => /^site:/i.test(token) && token.length > 5
+        ? token.slice(5)
+        : token)
+      .join(" ");
   const utf8ByteLength = (value) => {
     let bytes = 0;
     for (const character of String(value || "")) {
@@ -380,6 +435,10 @@ async function run(ctx, inputs) {
             100
           ),
           content: bounded(item.content || item.snippet || "", 600),
+          provider_text: boundedText(
+            typeof item.full_text === "string" ? item.full_text : "",
+            MAX_PROVIDER_TEXT_CHARS
+          ),
           engines: uniqueStrings(Array.isArray(item.engines) ? item.engines : [])
             .slice(0, 4),
         }))
@@ -688,7 +747,7 @@ async function run(ctx, inputs) {
   };
   const planFocuses = (plan) => {
     const tracks = Array.isArray(plan.tracks) ? plan.tracks : [];
-    return tracks.slice(0, 4).map((track, index) => {
+    return tracks.slice(0, MAX_RESEARCH_FOCUSES).map((track, index) => {
       const item = object(track);
       const questions = (Array.isArray(item.questions) ? item.questions : [])
         .map((question) => {
@@ -778,9 +837,21 @@ async function run(ctx, inputs) {
           // Provider dates are discovery metadata and may describe an index,
           // crawl, or documentation build rather than publication. Only the
           // fetched text may establish a date in closed evidence.
-          reliability: `Fetched source text${item.engines.length > 0
-            ? ` discovered via ${item.engines.join(", ")}`
-            : ""}; authority and claim fit require closed-evidence review.`,
+          reliability: item.retrieval_mode === "provider_full_text"
+            ? item.provider_snapshot_preferred === true
+              ? `Search-provider source-text snapshot${item.engines.length > 0
+                ? ` returned via ${item.engines.join(", ")}`
+                : ""}; retained after deterministic bounded candidate admission, and authority and claim fit require closed-evidence review.`
+              : `Search-provider source-text snapshot${item.engines.length > 0
+                ? ` returned via ${item.engines.join(", ")}`
+                : ""}; direct transport was unavailable, and authority and claim fit require closed-evidence review.`
+            : item.retrieval_mode === "bounded_direct_fetch"
+            ? `Bounded initial fetched source-text snapshot${item.engines.length > 0
+              ? ` discovered via ${item.engines.join(", ")}`
+              : ""}; retained after deterministic bounded candidate admission, and authority and claim fit require closed-evidence review.`
+            : `Fetched source text${item.engines.length > 0
+              ? ` discovered via ${item.engines.join(", ")}`
+              : ""}; authority and claim fit require closed-evidence review.`,
           chunks,
         };
       })

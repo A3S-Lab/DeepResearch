@@ -10,9 +10,12 @@ pub fn retrieval_workflow_source() -> &'static str {
         compact_workflow_source(concat!(
             include_str!("workflow/retrieval_foundation.js"),
             include_str!("workflow/retrieval_web.js"),
+            include_str!("workflow/retrieval_source_selection.js"),
+            include_str!("workflow/retrieval_web_projection.js"),
             include_str!("workflow/retrieval_selection.js"),
             include_str!("workflow/retrieval_reduction.js"),
             include_str!("workflow/retrieval_materialization.js"),
+            include_str!("workflow/retrieval_gap.js"),
             include_str!("workflow/retrieval_loop.js"),
             include_str!("workflow/retrieval_local.js"),
             include_str!("workflow/retrieval_local_collection.js"),

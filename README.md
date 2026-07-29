@@ -94,10 +94,10 @@ with an explicit locale selection may replace it with
 - **Exact-Query Bootstrap**: Start retrieval from the unmodified user query
   while semantic planning runs concurrently, and promote at most three explicit
   HTTP(S) references in that query to direct retrieval seeds
-- **Bounded Semantic Planning**: Add validated research tracks and at most seven
-  supplemental plain-text queries without replacing the original query; named
-  comparisons receive a shared synthesis track, and comprehensive question-role
-  coverage is validated across the complete plan
+- **Bounded Semantic Planning**: Decompose at most 24 atomic user requirements,
+  map every requirement to one or more of at most eight material research
+  tracks, and add at most 15 supplemental plain-text queries without replacing
+  the original query; unmatched, duplicate, or invented mappings fail closed
 - **Closed Evidence Admission**: Admit only exact source and chunk identities
   selected through typed track, criterion, and source-role edges
 - **Typed Claim Graphs**: Distinguish facts, inferences, and recommendations,
@@ -107,13 +107,17 @@ with an explicit locale selection may replace it with
 - **Per-Dimension Depth Gate**: Require every resolved material dimension in a
   comprehensive report to contain a direct answer, two factual findings from
   distinct sources, a multi-step analytical chain, and an explicit implication
-  or applicability boundary. If every dimension remains bounded, exactly one
-  qualified partial conclusion may publish only when it passes the same depth
-  gate and retains an explicit typed gap
-- **Evidence-Preserving Narrative Planning**: Let the model choose natural
-  section headings and paragraph groupings only after the claim graph is
-  complete; the Host verifies that every finding appears exactly once and that
-  the plan cannot add or rewrite evidence
+  or applicability boundary. Only complete material coverage can become a
+  successful `Synthesized` result; any `Qualified` graph remains an explicitly
+  incomplete preview
+- **Independent Commercial Review**: After graph admission, require a separate
+  editorial generation to review every mapped requirement, dimension, and
+  claim for support, depth, temporal status, scope, language, and source-summary
+  prose before a synthesized draft can remain successful
+- **Evidence-Preserving Editorial Planning**: Let the independent editor improve
+  claim phrasing, natural section headings, and paragraph groupings only after
+  the claim graph is complete; the Host verifies exact claim identity, numeric
+  preservation, dependency order, and one-time placement of every finding
 - **Continuous Argument Rendering**: Render claims in authored paragraph order
   without fixed evidence/analysis/recommendation subheadings, while keeping
   basis edges and reproducible derivations available in a collapsed
@@ -125,7 +129,7 @@ with an explicit locale selection may replace it with
   and a sticky right table of contents on desktop; narrow screens stack the
   action menu and table of contents ahead of the report without page overflow
 - **Progressive Publication**: Preserve a source-backed report before attempting
-  synthesized or qualified publication
+  a typed claim graph and independent editorial review
 - **Explicit Evidence Boundaries**: Publish a no-evidence report when no source
   can safely support conclusions
 - **Crash-Safe Artifacts**: Replace Markdown and HTML as one digest-verified,
@@ -163,7 +167,7 @@ claim evidence merely because a provider returned it.
 
 ```toml
 [dependencies]
-a3s-deep-research = "0.1.2"
+a3s-deep-research = "0.1.3"
 serde_json = "1"
 ```
 
@@ -199,10 +203,11 @@ admission as bytes from the preferred provider.
 ## Engine Model
 
 Bootstrap retrieval and semantic planning begin together. Planning may define
-evidence tracks, completion criteria, and bounded supplemental queries. It
-cannot return URLs, choose transport budgets, replace the exact query, or
-publish facts. If planning is invalid or unavailable, the engine continues from
-the exact query under a conservative comprehensive, freshness-aware gate.
+up to 24 atomic request requirements, map them to at most eight evidence tracks,
+and return at most 15 supplemental queries. It cannot return URLs, choose
+transport budgets, replace the exact query, or publish facts. If planning is
+invalid or unavailable, the engine continues from the exact query under a
+conservative comprehensive, freshness-aware gate.
 
 For web-capable evidence scopes, the Host also extracts at most three explicit
 HTTP(S) references from the exact user query as direct retrieval seeds. It
@@ -226,6 +231,8 @@ semantic outline ──> bounded supplemental queries      │
                                   Host inquiry projection of exact
                                   source/chunk IDs, criteria, and roles
                                                        │
+                                  up to four typed-gap retrieval rounds
+                                                       │
                          ┌─────────────┴─────────────┐
                          │                           │
                no admitted evidence       semantically admitted evidence
@@ -235,6 +242,8 @@ semantic outline ──> bounded supplemental queries      │
                                       optional typed claim graph
                                                      │
                                   deterministic graph admission
+                                                     │
+                                  independent commercial review
                                                      │
                            synthesized / qualified / source-backed
 ```
@@ -246,10 +255,17 @@ completion order. A completed source can therefore be reused after restart,
 while an ambiguous running effect is redelivered with the same attempt under
 at-least-once semantics.
 
-When typed coverage remains incomplete, the existing single supplemental pass
-may consider both unused discovery results and explicit HTTPS references from
-semantically retained evidence. It still fetches at most two sources, and every
-fetched reference must pass the same closed semantic evidence selection.
+When typed coverage remains incomplete, up to four gap-directed rounds may use
+unused discovery results, explicit HTTPS references from admitted evidence, and
+new queries generated only from typed missing criteria or source roles. Each
+unresolved track is expanded into one ordered target per missing atomic
+criterion; role-only targets enter after their criteria are otherwise covered.
+The Host contract derives a maximum of 24 new queries from the eight-track,
+three-criteria envelope and permits at most 16 supplemental fetches in total.
+The workflow rotates those targets fairly across up to four rounds, reserves
+capacity for the later round, subtracts the first round's actual scheduled
+effects, and never owns a duplicate numeric budget. Every fetched reference
+passes the same closed semantic evidence selection.
 
 Replay decisions use only exact run, stage, step, and candidate identities plus
 typed state. Retrieval retries are equally closed: only object-shaped error
@@ -278,11 +294,11 @@ Track relevance never closes a completion criterion, and criterion coverage
 never manufactures a claim. A focused report may publish one structurally
 sufficient cited claim. A comprehensive report reaches `Synthesized` only when
 its admitted graph closes every material dimension. A report with both deeply
-analyzed resolved dimensions and unresolved dimensions remains `Qualified` with
-explicit typed gaps. When every dimension is unresolved, the Host admits at
-most one qualified partial conclusion, and only if that bounded dimension
-independently satisfies the full two-source analytical depth gate and retains
-its gap.
+analyzed resolved dimensions and unresolved dimensions may remain `Qualified`
+with explicit typed gaps, but `Qualified` is never a successful completed
+research result. When every dimension is unresolved, the Host admits at most
+one qualified partial preview, and only if that bounded dimension independently
+satisfies the full two-source analytical depth gate and retains its gap.
 
 The typed comprehensive gate retains the report-wide floor of one direct
 answer, five supporting findings, six admitted claims, two cited sources, and
@@ -298,21 +314,26 @@ multi-cited facts, three paraphrases of one conclusion, and source-by-source
 summaries do not satisfy this requirement.
 
 The engine persists both the number of resolved material dimensions and the
-number that passed this deeper gate. A synthesized report, or a qualified
-report with resolved dimensions, is valid only when those counts are equal. The
-all-bounded exception is represented explicitly as zero resolved dimensions,
-one deeply analyzed bounded dimension, exactly one direct answer, and at least
-one typed gap. Restart recovery therefore cannot promote an older report whose
-aggregate metrics hide a thin section.
+number that passed this deeper gate. A synthesized report is valid only when
+those counts are equal and every material requirement is resolved. A qualified
+artifact may preserve supported partial work, but its nonzero gap count keeps
+it incomplete at every CLI, TUI, and Web success boundary. The all-bounded
+preview is represented explicitly as zero resolved dimensions, one deeply
+analyzed bounded dimension, exactly one direct answer, and at least one typed
+gap. Restart recovery therefore cannot promote an older report whose aggregate
+metrics hide a thin section.
 
-After the graph is complete, the model returns a bounded narrative plan
-containing only natural section headings and ordered claim-ID groups. The Host
-requires one section per research dimension and an exact, in-order placement
-of every finding. Renderers then project those groups as continuous prose
-instead of fixed evidence, analysis, and recommendation cards. Basis edges and
-derivations remain available in a collapsed traceability disclosure, so the
-default reading path stays editorial while the evidence path remains
-auditable.
+After the graph is complete, an independent editorial generation receives the
+exact query, current date, mapped requirements, admitted claims, and only the
+closed evidence excerpts cited by those claims. It must review every dimension
+and every claim, classify fact temporal status, and return evidence-preserving
+rewrites plus a bounded narrative plan. The Host rejects missing or duplicate
+reviews, inconsistent readiness, unsupported temporal classes, numeric drift,
+changed claim identities, dependency inversions, or shallow/source-summary
+dimensions. A synthesized draft that fails this review falls back to the staged
+source-backed artifact instead of becoming successful. Renderers project an
+admitted plan as continuous prose while retaining basis edges and derivations
+in a collapsed traceability disclosure.
 
 An inference or recommendation may combine admitted premises from other
 dimensions through explicit basis edges. Those edges do not manufacture
@@ -343,7 +364,8 @@ language.
 
 Publication is progressive. Once evidence is semantically admitted, the engine
 stages a source-backed Markdown/HTML pair before report generation. A failed,
-timed-out, or invalid proposal cannot erase it. If synthesized publication
+timed-out, invalid, or commercially rejected synthesized proposal cannot erase
+it. If synthesized publication
 returns an ambiguous error after touching the pair, the engine resolves the
 exact run receipt and otherwise re-publishes the closed source snapshot.
 

@@ -25,7 +25,6 @@ use projection::{
 struct ActiveReplayRuntime {
     outline: Value,
     report: Mutex<Option<Result<Value, String>>>,
-    editorial: Mutex<Option<Result<Value, String>>>,
     bootstrap: WorkflowOutput,
     planned: WorkflowOutput,
     workspace: PathBuf,
@@ -38,10 +37,6 @@ struct ActiveReplayRuntime {
 impl ActiveReplayRuntime {
     fn new(replay: &FrozenReplay, workspace: PathBuf) -> Self {
         let proposal = report_proposal(replay);
-        let editorial = proposal
-            .get("narrative")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({ "sections": [] }));
         let report = match replay.fault.as_ref() {
             Some(FrozenFault::ReportGenerationTimeout) => {
                 Err("scripted typed report-generation timeout".to_string())
@@ -51,7 +46,6 @@ impl ActiveReplayRuntime {
         Self {
             outline: planner_outline(replay),
             report: Mutex::new(Some(report)),
-            editorial: Mutex::new(Some(Ok(editorial))),
             bootstrap: bootstrap_output(replay),
             planned: planned_output(replay),
             workspace,
@@ -61,6 +55,91 @@ impl ActiveReplayRuntime {
             progress: Mutex::new(Vec::new()),
         }
     }
+}
+
+fn passing_editorial_plan(arguments: &Value) -> Result<Value, String> {
+    let prompt = arguments
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "active replay editorial request omitted its prompt".to_string())?;
+    let packet = prompt
+        .rsplit_once("CLOSED_EDITORIAL_PACKET=")
+        .map(|(_, packet)| packet)
+        .ok_or_else(|| "active replay editorial prompt omitted its packet".to_string())?;
+    let packet = serde_json::from_str::<Value>(packet)
+        .map_err(|error| format!("decode active replay editorial packet: {error}"))?;
+    let claims = packet
+        .get("admitted_claims")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let dimensions = packet
+        .get("dimensions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let sections = dimensions
+        .iter()
+        .filter_map(|dimension| {
+            let dimension_id = dimension.get("dimension_id")?.as_str()?;
+            let paragraphs = claims
+                .iter()
+                .filter(|claim| {
+                    claim.get("dimension_id").and_then(Value::as_str) == Some(dimension_id)
+                        && claim.get("placement").and_then(Value::as_str) == Some("finding")
+                })
+                .filter_map(|claim| {
+                    let purpose = match claim.get("analysis_role")?.as_str()? {
+                        "evidence" => "evidence",
+                        "comparison" | "explanation" => "synthesis",
+                        "implication" => "implication",
+                        "challenge" | "boundary" => "boundary",
+                        _ => return None,
+                    };
+                    Some(serde_json::json!({
+                        "purpose": purpose,
+                        "claim_ids": [claim.get("claim_id")?.as_str()?],
+                    }))
+                })
+                .collect::<Vec<_>>();
+            Some(serde_json::json!({
+                "dimension_id": dimension_id,
+                "heading": dimension.get("planning_title")?.as_str()?,
+                "paragraphs": paragraphs,
+            }))
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "quality_review": {
+            "publication_ready": true,
+            "dimension_reviews": sections.iter().filter_map(|section| {
+                Some(serde_json::json!({
+                    "dimension_id": section.get("dimension_id")?.as_str()?,
+                    "verdict": "pass",
+                    "issue_codes": [],
+                }))
+            }).collect::<Vec<_>>(),
+            "claim_reviews": claims.iter().filter_map(|claim| {
+                Some(serde_json::json!({
+                    "claim_id": claim.get("claim_id")?.as_str()?,
+                    "verdict": "pass",
+                    "temporal_status": if claim.get("kind")?.as_str()? == "fact" {
+                        "not_time_sensitive"
+                    } else {
+                        "not_applicable"
+                    },
+                    "issue_codes": [],
+                }))
+            }).collect::<Vec<_>>(),
+        },
+        "claim_rewrites": claims.iter().filter_map(|claim| {
+            Some(serde_json::json!({
+                "claim_id": claim.get("claim_id")?.as_str()?,
+                "text": claim.get("text")?.as_str()?,
+            }))
+        }).collect::<Vec<_>>(),
+        "sections": sections,
+    }))
 }
 
 #[async_trait]
@@ -78,12 +157,7 @@ impl StructuredGenerationPort for ActiveReplayRuntime {
                 .expect("report result lock")
                 .take()
                 .expect("one report request"),
-            GenerationStage::Editorial => self
-                .editorial
-                .lock()
-                .expect("editorial result lock")
-                .take()
-                .expect("one editorial request"),
+            GenerationStage::Editorial => passing_editorial_plan(&request.arguments),
         }
     }
 }

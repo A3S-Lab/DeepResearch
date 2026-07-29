@@ -41,7 +41,11 @@
       0
     )
   );
-  const selectorShardPackets = (packet) => {
+  const selectorShardPackets = (
+    packet,
+    maximumPacketBytes = MAX_SELECTOR_SHARD_PACKET_BYTES,
+    maximumShardSources = MAX_SELECTOR_SHARD_SOURCES
+  ) => {
     if (!packet || !Array.isArray(packet.sources)) {
       return [];
     }
@@ -49,23 +53,34 @@
       if (!Array.isArray(source.chunks) || source.chunks.length === 0) {
         return [];
       }
+      // JSON arrays add only the serialized element plus one comma after the
+      // first element. Measure the stable packet/source envelope once, then
+      // account for each chunk incrementally. Re-serializing the complete
+      // growing packet for every chunk is quadratic and makes durable replay
+      // increasingly expensive without changing any shard boundary.
+      const emptyPacketBytes = utf8ByteLength(JSON.stringify(
+        selectorShardPacket(
+          packet,
+          [Object.assign({}, source, { chunks: [] })]
+        )
+      ));
       const units = [];
       let chunks = [];
+      let packetBytes = emptyPacketBytes;
       for (const chunk of source.chunks) {
-        const candidateChunks = [...chunks, chunk];
-        const candidate = selectorShardPacket(
-          packet,
-          [Object.assign({}, source, { chunks: candidateChunks })]
-        );
+        const chunkBytes = utf8ByteLength(JSON.stringify(chunk));
+        const candidateBytes = packetBytes + chunkBytes +
+          (chunks.length > 0 ? 1 : 0);
         if (
           chunks.length > 0 &&
-          utf8ByteLength(JSON.stringify(candidate)) >
-            MAX_SELECTOR_SHARD_PACKET_BYTES
+          candidateBytes > maximumPacketBytes
         ) {
           units.push(Object.assign({}, source, { chunks }));
           chunks = [chunk];
+          packetBytes = emptyPacketBytes + chunkBytes;
         } else {
-          chunks = candidateChunks;
+          chunks.push(chunk);
+          packetBytes = candidateBytes;
         }
       }
       if (chunks.length > 0) {
@@ -90,8 +105,9 @@
           [...shard.sources, unit]
         );
         if (
+          shard.sources.length < maximumShardSources &&
           utf8ByteLength(JSON.stringify(candidate)) <=
-            MAX_SELECTOR_SHARD_PACKET_BYTES
+            maximumPacketBytes
         ) {
           shards[index] = candidate;
           packed = true;
@@ -111,13 +127,21 @@
     recoveryStepPrefix
   ) => shards.flatMap((shard, shardIndex) => {
     const primaryStepId = `${shardStepPrefix}${shardIndex + 1}`;
-    if (!failures[primaryStepId] || shard.sources.length <= 1) {
+    if (!failures[primaryStepId]) {
       return [];
     }
-    return shard.sources.map((source, sourceIndex) => ({
+    // Recovery isolates sources as well as shrinking the byte envelope. A
+    // source-local model or content failure must not make an independently
+    // valid sibling disappear merely because the optimistic packet packed
+    // them together.
+    return selectorShardPackets(
+      shard,
+      MAX_SELECTOR_RECOVERY_PACKET_BYTES,
+      1
+    ).map((recoveryShard, recoveryIndex) => ({
       parent_shard_index: shardIndex,
-      step_id: `${recoveryStepPrefix}${shardIndex + 1}_${sourceIndex + 1}`,
-      packet: selectorShardPacket(shard, [source]),
+      step_id: `${recoveryStepPrefix}${shardIndex + 1}_${recoveryIndex + 1}`,
+      packet: recoveryShard,
     }));
   });
   const selectorShardReductionEntries = (
@@ -127,7 +151,7 @@
     recoveryEntries
   ) => shards.flatMap((shard, shardIndex) => {
     const stepId = `${shardStepPrefix}${shardIndex + 1}`;
-    if (failures[stepId] && shard.sources.length > 1) {
+    if (failures[stepId]) {
       return recoveryEntries.filter((entry) =>
         entry.parent_shard_index === shardIndex
       );
