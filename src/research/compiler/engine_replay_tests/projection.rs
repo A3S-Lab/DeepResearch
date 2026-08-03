@@ -27,7 +27,7 @@ pub(super) fn workflow_args(replay: &FrozenReplay) -> Value {
             ),
         },
         "limits": {
-            "timeoutMs": 600_000,
+            "timeoutMs": crate::engine::DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS,
             "maxToolCalls": 64,
             "maxOutputBytes": 1_048_576,
         }
@@ -40,7 +40,8 @@ pub(super) fn planner_outline(replay: &FrozenReplay) -> Value {
         .spec
         .dimensions
         .iter()
-        .map(|dimension| {
+        .enumerate()
+        .map(|(index, dimension)| {
             let roles = dimension
                 .source_target_ids
                 .iter()
@@ -52,6 +53,7 @@ pub(super) fn planner_outline(replay: &FrozenReplay) -> Value {
                 "title": bounded_text(&dimension.question, 160),
                 "focus": bounded_text(&dimension.question, 500),
                 "material": dimension.material,
+                "requirement_ids": [format!("request.{}", index + 1)],
                 "completion_criteria": [bounded_text(&dimension.question, 240)],
                 "questions": [{
                     "question": bounded_text(&dimension.question, 240),
@@ -81,6 +83,12 @@ pub(super) fn planner_outline(replay: &FrozenReplay) -> Value {
             replay.contract.spec.evidence_scope,
             EvidenceScope::Workspace | EvidenceScope::WebAndWorkspace
         ),
+        "request_requirements": replay.contract.spec.dimensions.iter().enumerate().map(|(index, dimension)| {
+            serde_json::json!({
+                "id": format!("request.{}", index + 1),
+                "text": bounded_text(&dimension.question, 300),
+            })
+        }).collect::<Vec<_>>(),
         "tracks": tracks,
         "supplemental_queries": [],
     })

@@ -1,8 +1,9 @@
 use a3s_deep_research::{
     engine::{
         DeepResearchCancellation, DeepResearchEngine, DeepResearchRequest, EngineLimits,
-        EvidenceScope, ProgressPort, PublicationPort, StructuredGenerationPort,
-        WorkflowExecutionPort, WorkspaceSourceHint,
+        EvidenceScope, ProgressPort, PublicationPort, RetrievalRunProvenanceBindingV1,
+        RetrievalRunProvenanceEnvelopeV1, StructuredGenerationPort, WorkflowExecutionPort,
+        WorkspaceSourceHint, RETRIEVAL_RUN_PROVENANCE_METADATA_KEY,
     },
     planner::deep_research_loop_contract,
 };
@@ -72,4 +73,25 @@ fn public_planner_contract_preserves_the_host_inputs() {
     assert_eq!(contract["goal"], query);
     assert_eq!(contract["controller"], "host_inquiry_reducer");
     assert_eq!(contract["hard_caps"]["max_tracks"], 4);
+}
+
+#[test]
+fn product_adapters_can_attach_validated_retrieval_receipt_identities() {
+    let binding = RetrievalRunProvenanceBindingV1::new(
+        "a3s/search-cascade-receipt/v1",
+        "a".repeat(64),
+        "b".repeat(64),
+        "c".repeat(64),
+    )
+    .expect("public receipt binding");
+    let envelope = RetrievalRunProvenanceEnvelopeV1::new(vec![binding]).expect("public envelope");
+    let mut metadata = serde_json::json!({});
+    envelope
+        .insert_into_metadata(&mut metadata)
+        .expect("public metadata attachment");
+
+    assert_eq!(
+        metadata[RETRIEVAL_RUN_PROVENANCE_METADATA_KEY]["bindings"][0]["output_sha256"],
+        "c".repeat(64)
+    );
 }

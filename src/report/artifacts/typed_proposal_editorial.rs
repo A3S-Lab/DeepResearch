@@ -101,7 +101,7 @@ fn stable_topological_indexes(dependencies: &[HashSet<usize>]) -> Option<Vec<usi
 }
 
 fn validate_typed_narrative_shape(plan: &TypedWireNarrativePlan) -> Result<(), String> {
-    if plan.sections.is_empty() || plan.sections.len() > 4 {
+    if plan.sections.is_empty() || plan.sections.len() > 8 {
         return Err("typed report narrative returned an invalid section count".to_string());
     }
     for section in &plan.sections {

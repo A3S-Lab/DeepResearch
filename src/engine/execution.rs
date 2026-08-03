@@ -1,8 +1,6 @@
-use std::future::Future;
+use serde_json::Value;
 
-use futures::future::{self, Either};
-use serde_json::{Map, Value};
-
+use super::provenance::workflow_retrieval_provenance_audit;
 use super::{
     DeepResearchCancellation, DeepResearchEngine, DeepResearchEngineError, DeepResearchEvent,
     DeepResearchLifecycle, DeepResearchRequest, DeepResearchResult, DeepResearchRun,
@@ -14,13 +12,14 @@ use crate::planner::{
     host_plan_from_outline, validated_loop_planner, workflow_args_with_plan, PlannedInquiry,
 };
 use crate::report::{
-    admit_deep_research_typed_report_draft_in_language_at,
-    apply_deep_research_typed_editorial_plan, canonical_workflow_output,
+    admit_deep_research_typed_report_draft_with_attribution_in_language_at as admit_attributed_report_draft,
+    apply_deep_research_typed_commercial_editorial_plan, canonical_workflow_output,
+    deep_research_attributed_source_catalog as attributed_source_catalog,
     deep_research_report_context_from_plan, deep_research_report_slug,
-    deep_research_source_catalog, deep_research_typed_editorial_prompt,
-    deep_research_typed_editorial_schema,
-    deep_research_typed_report_proposal_prompt_in_language_at,
-    deep_research_typed_report_proposal_schema_for_language, DeepResearchEvidenceFirstPublication,
+    deep_research_typed_editorial_prompt, deep_research_typed_editorial_schema,
+    deep_research_typed_report_proposal_prompt_with_attribution_in_language_at as attributed_report_prompt,
+    deep_research_typed_report_proposal_schema_with_attribution_for_language as attributed_report_schema,
+    AdmittedDeepResearchReport, DeepResearchEvidenceFirstPublication,
     DeepResearchPublicationQuality,
 };
 
@@ -137,6 +136,7 @@ impl DeepResearchEngine<'_> {
             .and_then(Value::as_str)
             .filter(|run_id| !run_id.trim().is_empty())
             .unwrap_or("unassigned");
+        let mut retrieval_provenance_audits = Vec::new();
 
         ensure_not_cancelled(cancellation)?;
         self.progress(
@@ -200,8 +200,13 @@ impl DeepResearchEngine<'_> {
         ) = match bootstrap {
             Ok(result) => {
                 let metadata = result.metadata;
+                if let Some(audit) =
+                    workflow_retrieval_provenance_audit(metadata.as_ref(), "bootstrap")
+                {
+                    retrieval_provenance_audits.push(audit);
+                }
                 let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
-                match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
+                match attributed_source_catalog(&query, &canonical, metadata.as_ref()) {
                     Ok(catalog) => {
                         self.progress(
                             root_run_id,
@@ -286,8 +291,13 @@ impl DeepResearchEngine<'_> {
             match planned_retrieval {
                 Ok(result) => {
                     let metadata = result.metadata;
+                    if let Some(audit) =
+                        workflow_retrieval_provenance_audit(metadata.as_ref(), "planned_retrieval")
+                    {
+                        retrieval_provenance_audits.push(audit);
+                    }
                     let canonical = canonical_workflow_output(&result.output, metadata.as_ref());
-                    match deep_research_source_catalog(&query, &canonical, metadata.as_ref()) {
+                    match attributed_source_catalog(&query, &canonical, metadata.as_ref()) {
                         Ok(catalog) => {
                             self.progress(
                                 root_run_id,
@@ -323,10 +333,20 @@ impl DeepResearchEngine<'_> {
                     (None, None, None, Some(error))
                 }
             };
-        let planned_catalog = planned_catalog
-            .filter(|catalog| catalog.sources.iter().any(|source| source.claim_eligible));
-        let bootstrap_catalog = bootstrap_catalog
-            .filter(|catalog| catalog.sources.iter().any(|source| source.claim_eligible));
+        let planned_catalog = planned_catalog.filter(|catalog| {
+            catalog
+                .catalog
+                .sources
+                .iter()
+                .any(|source| source.claim_eligible)
+        });
+        let bootstrap_catalog = bootstrap_catalog.filter(|catalog| {
+            catalog
+                .catalog
+                .sources
+                .iter()
+                .any(|source| source.claim_eligible)
+        });
 
         let (acquisition_output, acquisition_metadata, catalog, retrieval_fallback_error) =
             match (planned_catalog, planned_output, bootstrap_catalog) {
@@ -363,6 +383,7 @@ impl DeepResearchEngine<'_> {
 
         let relevant_source_count = catalog.as_ref().map_or(0, |catalog| {
             catalog
+                .catalog
                 .sources
                 .iter()
                 .filter(|source| source.claim_eligible)
@@ -399,7 +420,9 @@ impl DeepResearchEngine<'_> {
             ResearchProgress::Started(ResearchStage::SourcePublication),
         )
         .await?;
-        let artifacts = if let Some(catalog) = catalog.as_ref() {
+        let artifacts = if let Some(attributed_catalog) = catalog.as_ref() {
+            let catalog = &attributed_catalog.catalog;
+            let source_attribution = &attributed_catalog.attribution;
             let source_backed_quality = DeepResearchPublicationQuality {
                 research_scope: report_context.scope,
                 direct_answer_count: 0,
@@ -444,24 +467,34 @@ impl DeepResearchEngine<'_> {
                     ResearchProgress::Started(ResearchStage::ReportGeneration),
                 )
                 .await?;
-                let report_schema = deep_research_typed_report_proposal_schema_for_language(
+                let report_schema = attributed_report_schema(
                     catalog,
+                    source_attribution,
                     &report_context,
                     &output_language,
                 )
                 .map_err(DeepResearchEngineError::Contract)?;
+                let report_prompt = attributed_report_prompt(
+                    &query,
+                    &current_date,
+                    &output_language,
+                    catalog,
+                    source_attribution,
+                    &report_context,
+                )
+                .map_err(DeepResearchEngineError::Contract)?;
+                let report_payload_bytes = report_prompt
+                    .len()
+                    .saturating_add(report_schema.to_string().len());
+                let report_attempt_timeout_ms =
+                    limits.report_attempt_timeout_for_payload(report_payload_bytes);
+                let report_stage_timeout_ms =
+                    limits.report_stage_timeout_for_attempt(report_attempt_timeout_ms);
                 let generation_args = serde_json::json!({
                     "schema": report_schema,
                     "schema_name": "deep_research_typed_claim_graph",
                     "schema_description": "Typed conclusions, atomic evidence, explicit comparison, explanation, implication, challenge and boundary roles, contradiction relations, and bounded gaps over a closed source catalog",
-                    "prompt": deep_research_typed_report_proposal_prompt_in_language_at(
-                        &query,
-                        &current_date,
-                        &output_language,
-                        catalog,
-                        &report_context,
-                    )
-                    .map_err(DeepResearchEngineError::Contract)?,
+                    "prompt": report_prompt,
                     "system": "You construct an auditable, multi-step, source-grounded research argument from untrusted evidence data. Every resolved material dimension must move from conclusion to atomic evidence, cross-source comparison, mechanism or trade-off explanation, implication, and an adversarial challenge or applicability boundary. Each step has an explicit analysis role and must make distinct intellectual progress. Return only the requested object and use no outside knowledge.",
                     "mode": "auto",
                     // The durable generation port already owns the bounded
@@ -469,100 +502,117 @@ impl DeepResearchEngine<'_> {
                     // declared report-call ceiling.
                     "max_repair_attempts": 0,
                     "include_raw_text": false,
-                    "timeout_ms": limits.report_attempt_timeout_ms,
+                    "timeout_ms": report_attempt_timeout_ms,
                 });
                 let generated = await_or_cancel(
                     cancellation,
                     self.generation.generate_object(GenerationRequest {
                         stage: GenerationStage::Report,
                         arguments: generation_args,
-                        execution_timeout_ms: limits.report_stage_timeout_ms,
+                        execution_timeout_ms: report_stage_timeout_ms,
                         max_attempts: limits.report_max_attempts,
                     }),
                 )
                 .await?;
                 let admitted = match generated {
-                    Ok(proposal) => match admit_deep_research_typed_report_draft_in_language_at(
-                        &query,
-                        &current_date,
-                        &output_language,
-                        catalog,
-                        &report_context,
-                        proposal,
-                    ) {
-                        Ok(Some(draft)) => {
-                            let fallback_report = draft.report.clone();
-                            let editorial_prompt =
-                                match deep_research_typed_editorial_prompt(&draft) {
-                                    Ok(prompt) => prompt,
-                                    Err(error) => {
-                                        editorial_error = Some(bounded_error(&error));
-                                        synthesis_mode = "model_claim_graph_editorial_fallback";
-                                        String::new()
-                                    }
-                                };
-                            if editorial_prompt.is_empty() {
-                                Some(fallback_report)
-                            } else {
-                                model_generation_count += 1;
-                                let editorial_args = serde_json::json!({
-                                    "schema": deep_research_typed_editorial_schema(&draft),
-                                    "schema_name": "deep_research_typed_editorial_plan",
-                                    "schema_description": "Evidence-preserving section headings, paragraph grouping, purposes, and topologically valid reading order over already admitted claims",
-                                    "prompt": editorial_prompt,
-                                    "system": "You edit the reading flow of an admitted research argument. You may select headings, paragraph groupings, purposes, and a premise-preserving claim order only. Never add, remove, rewrite, summarize, or merge a claim. Return only the requested object.",
-                                    "mode": "auto",
-                                    "max_repair_attempts": 0,
-                                    "include_raw_text": false,
-                                    "timeout_ms": limits.report_attempt_timeout_ms,
-                                });
-                                let editorial = await_or_cancel(
-                                    cancellation,
-                                    self.generation.generate_object(GenerationRequest {
-                                        stage: GenerationStage::Editorial,
-                                        arguments: editorial_args,
-                                        execution_timeout_ms: limits.report_stage_timeout_ms,
-                                        max_attempts: limits.report_max_attempts,
-                                    }),
-                                )
-                                .await?;
-                                match editorial {
-                                    Ok(editorial) => {
-                                        match apply_deep_research_typed_editorial_plan(
-                                            &query,
-                                            &current_date,
-                                            &output_language,
-                                            catalog,
-                                            &report_context,
-                                            draft,
-                                            editorial,
-                                        ) {
-                                            Ok(report) => {
-                                                synthesis_mode = "model_claim_graph_editorial";
-                                                Some(report)
-                                            }
-                                            Err(error) => {
-                                                editorial_error = Some(bounded_error(&error));
-                                                synthesis_mode =
-                                                    "model_claim_graph_editorial_fallback";
-                                                Some(fallback_report)
+                    Ok(proposal) => {
+                        match admit_attributed_report_draft(
+                            &query,
+                            &current_date,
+                            &output_language,
+                            catalog,
+                            source_attribution,
+                            &report_context,
+                            proposal,
+                        ) {
+                            Ok(Some(draft)) => {
+                                let fallback_report = draft.report.clone();
+                                let editorial_prompt =
+                                    match deep_research_typed_editorial_prompt(&draft) {
+                                        Ok(prompt) => prompt,
+                                        Err(error) => {
+                                            editorial_error = Some(bounded_error(&error));
+                                            synthesis_mode = "model_claim_graph_editorial_fallback";
+                                            String::new()
+                                        }
+                                    };
+                                if editorial_prompt.is_empty() {
+                                    incomplete_editorial_fallback(fallback_report)
+                                } else {
+                                    model_generation_count += 1;
+                                    let editorial_schema =
+                                        deep_research_typed_editorial_schema(&draft);
+                                    let editorial_payload_bytes = editorial_prompt
+                                        .len()
+                                        .saturating_add(editorial_schema.to_string().len());
+                                    let editorial_attempt_timeout_ms = limits
+                                        .report_attempt_timeout_for_payload(
+                                            editorial_payload_bytes,
+                                        );
+                                    let editorial_stage_timeout_ms = limits
+                                        .report_stage_timeout_for_attempt(
+                                            editorial_attempt_timeout_ms,
+                                        );
+                                    let editorial_args = serde_json::json!({
+                                        "schema": editorial_schema,
+                                        "schema_name": "deep_research_typed_editorial_plan",
+                                        "schema_description": "Independent requirement, evidence, temporal, depth, and prose review followed by evidence-preserving claim rewrites and narrative planning over already admitted claims",
+                                        "prompt": editorial_prompt,
+                                        "system": "You are the independent commercial-quality reviewer and final editor of an admitted research argument. Audit every mapped requirement and claim against the closed evidence, classify temporal status, and fail readiness on any omission, unsupported proposition, shallow analysis, misleading modality, or source-summary prose. Then rewrite for natural long-form reading while preserving the admitted graph and evidence boundary. Return only the requested object.",
+                                        "mode": "auto",
+                                        "max_repair_attempts": 0,
+                                        "include_raw_text": false,
+                                        "timeout_ms": editorial_attempt_timeout_ms,
+                                    });
+                                    let editorial = await_or_cancel(
+                                        cancellation,
+                                        self.generation.generate_object(GenerationRequest {
+                                            stage: GenerationStage::Editorial,
+                                            arguments: editorial_args,
+                                            execution_timeout_ms: editorial_stage_timeout_ms,
+                                            max_attempts: limits.report_max_attempts,
+                                        }),
+                                    )
+                                    .await?;
+                                    match editorial {
+                                        Ok(editorial) => {
+                                            match apply_deep_research_typed_commercial_editorial_plan(
+                                                &query,
+                                                &current_date,
+                                                &output_language,
+                                                catalog,
+                                                &report_context,
+                                                draft,
+                                                editorial,
+                                            ) {
+                                                Ok(report) => {
+                                                    synthesis_mode = "model_claim_graph_editorial";
+                                                    Some(report)
+                                                }
+                                                Err(error) => {
+                                                    editorial_error = Some(bounded_error(&error));
+                                                    synthesis_mode =
+                                                        "model_claim_graph_editorial_fallback";
+                                                    incomplete_editorial_fallback(fallback_report)
+                                                }
                                             }
                                         }
-                                    }
-                                    Err(error) => {
-                                        editorial_error = Some(bounded_error(&error));
-                                        synthesis_mode = "model_claim_graph_editorial_fallback";
-                                        Some(fallback_report)
+                                        Err(error) => {
+                                            editorial_error = Some(bounded_error(&error));
+                                            synthesis_mode =
+                                                "model_claim_graph_editorial_fallback";
+                                            incomplete_editorial_fallback(fallback_report)
+                                        }
                                     }
                                 }
                             }
+                            Ok(None) => None,
+                            Err(error) => {
+                                report_error = Some(bounded_error(&error));
+                                None
+                            }
                         }
-                        Ok(None) => None,
-                        Err(error) => {
-                            report_error = Some(bounded_error(&error));
-                            None
-                        }
-                    },
+                    }
                     Err(error) => {
                         report_error = Some(bounded_error(&error));
                         None
@@ -702,10 +752,17 @@ impl DeepResearchEngine<'_> {
                     }
                 } else {
                     if report_error.is_none() {
-                        report_error = Some(
-                            "the report proposal did not satisfy the query-scoped answer, evidence, independent-source, and depth gates"
-                                .to_string(),
-                        );
+                        report_error = Some(editorial_error.as_ref().map_or_else(
+                            || {
+                                "the report proposal did not satisfy the query-scoped answer, evidence, independent-source, and depth gates"
+                                    .to_string()
+                            },
+                            |error| {
+                                format!(
+                                    "the report did not pass the independent commercial quality review: {error}"
+                                )
+                            },
+                        ));
                     }
                     self.progress(
                         root_run_id,
@@ -783,9 +840,11 @@ impl DeepResearchEngine<'_> {
             cited_source_count,
             substantive_character_count,
             relevant_source_count,
-            source_count: catalog.as_ref().map_or(0, |catalog| catalog.sources.len()),
+            source_count: catalog
+                .as_ref()
+                .map_or(0, |catalog| catalog.catalog.sources.len()),
         };
-        let output = serde_json::json!({
+        let mut output = serde_json::json!({
             "query": query,
             "output_language": output_language,
             "mode": "evidence_first_report",
@@ -793,7 +852,7 @@ impl DeepResearchEngine<'_> {
             "research": {
                 "status": match publication {
                     DeepResearchEvidenceFirstPublication::Synthesized => "success",
-                    DeepResearchEvidenceFirstPublication::Qualified => "partial_success",
+                    DeepResearchEvidenceFirstPublication::Qualified => "incomplete",
                     DeepResearchEvidenceFirstPublication::SourceBacked => "degraded",
                     DeepResearchEvidenceFirstPublication::NoEvidence => "failed",
                 },
@@ -819,7 +878,9 @@ impl DeepResearchEngine<'_> {
                     "cited_source_count": cited_source_count,
                     "substantive_character_count": substantive_character_count,
                     "relevant_source_count": relevant_source_count,
-                    "source_count": catalog.as_ref().map_or(0, |catalog| catalog.sources.len()),
+                    "source_count": catalog.as_ref().map_or(0, |catalog| {
+                        catalog.catalog.sources.len()
+                    }),
                 },
                 "warnings": {
                     "report_error": report_error,
@@ -846,7 +907,9 @@ impl DeepResearchEngine<'_> {
                     "cited_source_count": cited_source_count,
                     "substantive_character_count": substantive_character_count,
                     "relevant_source_count": relevant_source_count,
-                    "source_count": catalog.as_ref().map_or(0, |catalog| catalog.sources.len()),
+                    "source_count": catalog.as_ref().map_or(0, |catalog| {
+                        catalog.catalog.sources.len()
+                    }),
                 },
             },
             "execution": {
@@ -857,6 +920,10 @@ impl DeepResearchEngine<'_> {
                     * required_model_generation_count,
             }
         });
+        if !retrieval_provenance_audits.is_empty() {
+            output["execution"]["retrieval_run_provenance"] =
+                Value::Array(retrieval_provenance_audits);
+        }
         Ok(DeepResearchRun {
             output,
             artifacts,
@@ -907,142 +974,4 @@ impl DeepResearchEngine<'_> {
     }
 }
 
-fn ensure_not_cancelled(
-    cancellation: &DeepResearchCancellation,
-) -> Result<(), DeepResearchEngineError> {
-    if cancellation.is_cancelled() {
-        Err(DeepResearchEngineError::Cancelled)
-    } else {
-        Ok(())
-    }
-}
-
-fn typed_result_output(mut output: Value, publication: PublicationOutcome) -> Value {
-    if let Some(research) = output.get_mut("research").and_then(Value::as_object_mut) {
-        research.insert(
-            "status".to_string(),
-            Value::String(publication_outcome_id(publication).to_string()),
-        );
-    }
-    if let Some(metadata) = output.get_mut("publication").and_then(Value::as_object_mut) {
-        metadata.remove("markdown");
-        metadata.remove("html");
-        metadata.insert(
-            "artifact_kinds".to_string(),
-            serde_json::json!(["markdown", "html"]),
-        );
-    }
-    output
-}
-
-const fn publication_outcome_id(publication: PublicationOutcome) -> &'static str {
-    match publication {
-        PublicationOutcome::Synthesized => "synthesized",
-        PublicationOutcome::Qualified => "qualified",
-        PublicationOutcome::SourceBacked => "source_backed",
-        PublicationOutcome::NoEvidence => "no_evidence",
-    }
-}
-
-async fn await_or_cancel<T>(
-    cancellation: &DeepResearchCancellation,
-    future: impl Future<Output = T>,
-) -> Result<T, DeepResearchEngineError> {
-    ensure_not_cancelled(cancellation)?;
-    let cancelled = cancellation.cancelled();
-    futures::pin_mut!(future);
-    futures::pin_mut!(cancelled);
-    match future::select(future, cancelled).await {
-        Either::Left((value, _)) => {
-            ensure_not_cancelled(cancellation)?;
-            Ok(value)
-        }
-        Either::Right(((), _)) => Err(DeepResearchEngineError::Cancelled),
-    }
-}
-
-fn required_planner_text<'a>(
-    planner: &'a Map<String, Value>,
-    field: &str,
-) -> Result<&'a str, DeepResearchEngineError> {
-    planner
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            DeepResearchEngineError::Contract(format!(
-                "planner contract has no non-empty `{field}`"
-            ))
-        })
-}
-
-fn required_planner_timeout(
-    planner: &Map<String, Value>,
-    field: &str,
-) -> Result<u64, DeepResearchEngineError> {
-    let value = planner.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        DeepResearchEngineError::Contract(format!("planner contract omitted integer `{field}`"))
-    })?;
-    if (1_000..=600_000).contains(&value) {
-        Ok(value)
-    } else {
-        Err(DeepResearchEngineError::Contract(format!(
-            "planner contract `{field}` must be between 1000 and 600000"
-        )))
-    }
-}
-
-fn bootstrap_acquisition_value(output: &str, expected_query: &str) -> Option<Value> {
-    let value = serde_json::from_str::<Value>(output).ok()?;
-    if value.get("query").and_then(Value::as_str) != Some(expected_query)
-        || value.get("mode").and_then(Value::as_str) != Some("bootstrap_acquisition")
-        || value
-            .pointer("/execution/terminal_authority")
-            .and_then(Value::as_str)
-            != Some("host_inquiry_reducer")
-    {
-        return None;
-    }
-    let acquisition = value.get("acquisition")?.clone();
-    let sources = acquisition.pointer("/packet/sources")?.as_array()?;
-    if sources.is_empty() || sources.len() > 16 {
-        return None;
-    }
-    let valid = sources.iter().all(|source| {
-        source
-            .get("source_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.trim().is_empty())
-            && source
-                .get("url_or_path")
-                .and_then(Value::as_str)
-                .is_some_and(|anchor| !anchor.trim().is_empty())
-            && source
-                .get("chunks")
-                .and_then(Value::as_array)
-                .is_some_and(|chunks| {
-                    !chunks.is_empty()
-                        && chunks.iter().all(|chunk| {
-                            chunk
-                                .get("chunk_id")
-                                .and_then(Value::as_str)
-                                .is_some_and(|id| !id.trim().is_empty())
-                                && chunk
-                                    .get("text")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|text| !text.trim().is_empty())
-                        })
-                })
-    });
-    valid.then_some(acquisition)
-}
-
-fn bounded_error(error: &str) -> String {
-    error
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(1_000)
-        .collect()
-}
+include!("execution/support.rs");

@@ -62,13 +62,55 @@ pub fn deep_research_report_context_from_plan(
         .filter(|title| !title.is_empty())
         .ok_or_else(|| "DeepResearch report plan omitted `report_title`".to_string())?
         .to_string();
+    let mut request_requirements = std::collections::BTreeMap::<String, String>::new();
+    if let Some(requirements) = plan
+        .get("request_requirements")
+        .and_then(serde_json::Value::as_array)
+    {
+        for requirement in requirements {
+            let id = requirement
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "DeepResearch report plan contains an invalid request requirement ID"
+                        .to_string()
+                })?;
+            let text = requirement
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "DeepResearch report plan contains invalid request requirement text"
+                        .to_string()
+                })?;
+            if request_requirements
+                .insert(id.to_string(), text.to_string())
+                .is_some()
+            {
+                return Err(format!(
+                    "DeepResearch report plan repeats request requirement `{id}`"
+                ));
+            }
+        }
+    }
     let raw_tracks = plan
         .get("tracks")
         .and_then(serde_json::Value::as_array)
         .filter(|tracks| !tracks.is_empty())
         .ok_or_else(|| "DeepResearch report plan omitted its semantic tracks".to_string())?;
+    if raw_tracks.len() > crate::planner::MAX_PLANNER_TRACK_EFFECTS as usize {
+        return Err(format!(
+            "DeepResearch report plan has {} tracks; maximum is {}",
+            raw_tracks.len(),
+            crate::planner::MAX_PLANNER_TRACK_EFFECTS
+        ));
+    }
     let mut tracks = Vec::with_capacity(raw_tracks.len());
-    for track in raw_tracks.iter().take(4) {
+    let mut mapped_requirement_ids = std::collections::BTreeSet::<String>::new();
+    for track in raw_tracks {
         let object = track
             .as_object()
             .ok_or_else(|| "DeepResearch report plan contains a non-object track".to_string())?;
@@ -131,7 +173,7 @@ pub fn deep_research_report_context_from_plan(
                 "DeepResearch report plan track omitted boolean `independent_corroboration_required`"
                     .to_string()
             })?;
-        tracks.push(serde_json::json!({
+        let mut normalized_track = serde_json::json!({
             "id": text("id")?,
             "title": text("title")?,
             "focus": text("focus")?,
@@ -147,7 +189,51 @@ pub fn deep_research_report_context_from_plan(
                 "primary_source_required": primary_source_required,
                 "independent_corroboration_required": independent_corroboration_required,
             },
-        }));
+        });
+        if !request_requirements.is_empty() {
+            let requirement_ids = object
+                .get("requirement_ids")
+                .and_then(serde_json::Value::as_array)
+                .filter(|ids| !ids.is_empty())
+                .ok_or_else(|| {
+                    "DeepResearch report plan track omitted mapped request requirements"
+                        .to_string()
+                })?
+                .iter()
+                .map(|id| {
+                    id.as_str()
+                        .map(str::trim)
+                        .filter(|id| request_requirements.contains_key(*id))
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            "DeepResearch report plan track maps an unknown request requirement"
+                                .to_string()
+                        })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let requirement_details = requirement_ids
+                .iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "id": id,
+                        "text": request_requirements[id],
+                    })
+                })
+                .collect::<Vec<_>>();
+            mapped_requirement_ids.extend(requirement_ids.iter().cloned());
+            normalized_track["requirement_ids"] = serde_json::json!(requirement_ids);
+            normalized_track["request_requirements"] = serde_json::json!(requirement_details);
+        }
+        tracks.push(normalized_track);
+    }
+    if !request_requirements.is_empty()
+        && mapped_requirement_ids
+            != request_requirements.keys().cloned().collect::<std::collections::BTreeSet<_>>()
+    {
+        return Err(
+            "DeepResearch report plan did not map every request requirement to synthesis"
+                .to_string(),
+        );
     }
     Ok(DeepResearchReportContext {
         report_title,
@@ -155,6 +241,60 @@ pub fn deep_research_report_context_from_plan(
         freshness_required,
         tracks,
     })
+}
+
+#[cfg(test)]
+mod report_context_tests {
+    use super::*;
+
+    #[test]
+    fn substantive_depth_counts_information_bearing_unicode_characters_only() {
+        assert_eq!(report_substantive_character_count("Evidence 2026!"), 12);
+        assert_eq!(report_substantive_character_count("研究，结论。"), 4);
+        assert_eq!(report_substantive_character_count("دليل؟"), 4);
+        assert_eq!(report_substantive_character_count("カナ！"), 2);
+        assert_eq!(report_substantive_character_count("कखग।"), 3);
+        assert_eq!(report_substantive_character_count("！？…—🙂\n\t"), 0);
+    }
+
+    #[test]
+    fn report_context_preserves_every_validated_research_track() {
+        let tracks = (0..crate::planner::MAX_PLANNER_TRACK_EFFECTS)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("request.part.{index}"),
+                    "title": format!("Requested part {index}"),
+                    "focus": format!("Resolve requested part {index}."),
+                    "material": true,
+                    "questions": [{
+                        "question": format!("What resolves requested part {index}?"),
+                        "role": "establish",
+                        "completion_criterion_indexes": [0],
+                    }],
+                    "completion_criteria": [format!("Requested part {index} is resolved.")],
+                    "evidence_requirements": {
+                        "primary_source_required": false,
+                        "independent_corroboration_required": false,
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let plan = serde_json::json!({
+            "report_title": "Multi-part inquiry",
+            "research_scope": "comprehensive",
+            "freshness_required": false,
+            "tracks": tracks,
+        });
+
+        let context = deep_research_report_context_from_plan(&plan)
+            .expect("every Host-validated track should reach report synthesis");
+
+        assert_eq!(
+            context.tracks.len(),
+            crate::planner::MAX_PLANNER_TRACK_EFFECTS as usize
+        );
+        assert_eq!(context.tracks.last().unwrap()["id"], "request.part.7");
+    }
 }
 
 #[doc(hidden)]
@@ -225,8 +365,8 @@ fn deep_research_typed_report_depth_requirements(
     requirements
 }
 
-fn report_substantive_character_count(text: &str) -> usize {
-    text.chars()
-        .filter(|character| !character.is_whitespace() && !character.is_control())
-        .count()
+/// Count Unicode letters and numbers in reader prose while excluding layout,
+/// punctuation, symbols, and control characters from depth thresholds.
+pub(crate) fn report_substantive_character_count(text: &str) -> usize {
+    text.chars().filter(|character| character.is_alphanumeric()).count()
 }

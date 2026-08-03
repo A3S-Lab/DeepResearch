@@ -9,16 +9,54 @@ use crate::report::{
     AdmittedDeepResearchReport, DeepResearchPublicationQuality, ResearchReportArtifacts,
 };
 
+pub const DEFAULT_PLANNER_ATTEMPT_TIMEOUT_MS: u64 = 300_000;
+pub const DEFAULT_PLANNER_MAX_ATTEMPTS: u8 = 2;
+pub const DEFAULT_BOOTSTRAP_STAGE_TIMEOUT_MS: u64 = 150_000;
+// Planned retrieval owns the initial closed selection plus as many as four
+// typed-gap rounds. Each round can require query generation, discovery,
+// source admission, transport, and source-aware evidence shards. Bound the
+// complete sequence as one durable stage without making its advertised loop
+// cardinality unreachable under the per-generation active timeouts.
+pub const DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS: u64 = 3_600_000;
+const REPORT_BASE_ATTEMPT_TIMEOUT_MS: u64 = 240_000;
+const REPORT_PAYLOAD_BASE_BYTES: usize = 32 * 1024;
+const REPORT_PAYLOAD_STEP_BYTES: usize = 32 * 1024;
+const REPORT_PAYLOAD_STEP_TIMEOUT_MS: u64 = 90_000;
+/// Maximum active time for one report or editorial generation. The engine
+/// selects a smaller timeout from the actual closed prompt and schema size.
+pub const DEFAULT_REPORT_ATTEMPT_TIMEOUT_MS: u64 = 420_000;
+pub const DEFAULT_REPORT_MAX_ATTEMPTS: u8 = 2;
+pub const DEFAULT_DURABLE_GENERATION_GRACE_MS: u64 = 15_000;
+pub const DEFAULT_MAX_CONCURRENT_GENERATIONS: u8 = 4;
+pub const DEFAULT_REPORT_STAGE_TIMEOUT_MS: u64 = DEFAULT_REPORT_ATTEMPT_TIMEOUT_MS
+    * DEFAULT_REPORT_MAX_ATTEMPTS as u64
+    + DEFAULT_DURABLE_GENERATION_GRACE_MS;
+pub const DEFAULT_PLANNER_STAGE_TIMEOUT_MS: u64 = DEFAULT_PLANNER_ATTEMPT_TIMEOUT_MS
+    * DEFAULT_PLANNER_MAX_ATTEMPTS as u64
+    + DEFAULT_DURABLE_GENERATION_GRACE_MS;
+pub const DEFAULT_PLANNING_BOOTSTRAP_STAGE_TIMEOUT_MS: u64 =
+    if DEFAULT_PLANNER_STAGE_TIMEOUT_MS > DEFAULT_BOOTSTRAP_STAGE_TIMEOUT_MS {
+        DEFAULT_PLANNER_STAGE_TIMEOUT_MS
+    } else {
+        DEFAULT_BOOTSTRAP_STAGE_TIMEOUT_MS
+    };
+
 mod cancellation;
 mod contract;
 mod event;
 mod execution;
+mod provenance;
 
 pub use cancellation::DeepResearchCancellation;
 pub use contract::{
     DeepResearchRequest, DeepResearchRequestLimits, EvidenceScope, WorkspaceSourceHint,
+    MAX_DEEP_RESEARCH_TRACKS,
 };
 pub use event::{DeepResearchEvent, DeepResearchLifecycle, PublicationOutcome};
+pub use provenance::{
+    RetrievalRunProvenanceBindingV1, RetrievalRunProvenanceEnvelopeV1, RetrievalRunProvenanceError,
+    RETRIEVAL_RUN_PROVENANCE_METADATA_KEY, RETRIEVAL_RUN_PROVENANCE_V1_SCHEMA,
+};
 
 /// Default execution limits for one progressively publishable research run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,20 +73,15 @@ pub struct EngineLimits {
 
 impl Default for EngineLimits {
     fn default() -> Self {
-        const GENERATION_GRACE_MS: u64 = 15_000;
-        const REPORT_ATTEMPT_MS: u64 = 240_000;
-        const REPORT_ATTEMPTS: u8 = 2;
-
         Self {
-            planner_attempt_timeout_ms: 90_000,
-            planner_max_attempts: 2,
-            bootstrap_stage_timeout_ms: 150_000,
-            planned_retrieval_stage_timeout_ms: 600_000,
-            report_attempt_timeout_ms: REPORT_ATTEMPT_MS,
-            report_stage_timeout_ms: REPORT_ATTEMPT_MS * u64::from(REPORT_ATTEMPTS)
-                + GENERATION_GRACE_MS,
-            report_max_attempts: REPORT_ATTEMPTS,
-            durable_generation_grace_ms: GENERATION_GRACE_MS,
+            planner_attempt_timeout_ms: DEFAULT_PLANNER_ATTEMPT_TIMEOUT_MS,
+            planner_max_attempts: DEFAULT_PLANNER_MAX_ATTEMPTS,
+            bootstrap_stage_timeout_ms: DEFAULT_BOOTSTRAP_STAGE_TIMEOUT_MS,
+            planned_retrieval_stage_timeout_ms: DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS,
+            report_attempt_timeout_ms: DEFAULT_REPORT_ATTEMPT_TIMEOUT_MS,
+            report_stage_timeout_ms: DEFAULT_REPORT_STAGE_TIMEOUT_MS,
+            report_max_attempts: DEFAULT_REPORT_MAX_ATTEMPTS,
+            durable_generation_grace_ms: DEFAULT_DURABLE_GENERATION_GRACE_MS,
         }
     }
 }
@@ -75,6 +108,22 @@ impl EngineLimits {
         planner_timeout_ms
             .saturating_mul(u64::from(self.planner_max_attempts))
             .saturating_add(self.durable_generation_grace_ms)
+    }
+
+    fn report_attempt_timeout_for_payload(self, payload_bytes: usize) -> u64 {
+        let excess_bytes = payload_bytes.saturating_sub(REPORT_PAYLOAD_BASE_BYTES);
+        let payload_steps = excess_bytes.div_ceil(REPORT_PAYLOAD_STEP_BYTES);
+        let payload_steps = u64::try_from(payload_steps).unwrap_or(u64::MAX);
+        REPORT_BASE_ATTEMPT_TIMEOUT_MS
+            .saturating_add(payload_steps.saturating_mul(REPORT_PAYLOAD_STEP_TIMEOUT_MS))
+            .min(self.report_attempt_timeout_ms)
+    }
+
+    fn report_stage_timeout_for_attempt(self, attempt_timeout_ms: u64) -> u64 {
+        attempt_timeout_ms
+            .saturating_mul(u64::from(self.report_max_attempts))
+            .saturating_add(self.durable_generation_grace_ms)
+            .min(self.report_stage_timeout_ms)
     }
 }
 

@@ -7,6 +7,32 @@ The project follows Semantic Versioning while the public API remains in the
 
 ## [Unreleased]
 
+### Added
+
+- Add a global, byte-bounded source-attribution review over each changed
+  selected portfolio when declared independence otherwise appears complete,
+  then preserve or refresh that review for the final portfolio. Same-origin
+  findings can now drive a bounded supplemental retrieval pass without
+  repeating the review for an unchanged portfolio. The workflow returns a
+  complete accountable-origin partition plus only the source-group pairs whose
+  independent attribution is positively established. The Host revalidates
+  every exact source ID and closes groups again after canonical report-source
+  coalescing.
+
+### Changed
+
+- Keep signed campaign validation, receipt verification, artifact binding, and
+  report-quality checks in the Rust project, and remove the release dependency
+  on a separately operated verifier.
+- Count independent corroboration and comprehensive cross-source synthesis by
+  verified attribution groups instead of distinct source aliases. Mirrors,
+  syndication, translations, derivative copies, malformed partitions, and
+  unknown group relationships now retain their evidence but fail closed for
+  independent-depth admission.
+- Require each resolved comprehensive material dimension to contain at least
+  1,200 Unicode letter-or-number characters in admitted claim prose and an
+  implication that integrates both comparison and explanation ancestry.
+
 ## [0.1.3] - 2026-07-26
 
 ### Added

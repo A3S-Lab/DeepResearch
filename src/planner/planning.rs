@@ -10,37 +10,41 @@ const DEEP_RESEARCH_LOOP_STAGES: [&str; 9] = [
     "deterministic_publication",
 ];
 
-const DEEP_RESEARCH_LOOP_CARDINALITY: [&str; 6] = [
+const DEEP_RESEARCH_LOOP_CARDINALITY: [&str; 7] = [
     "outline_generations",
     "initial_extractions",
+    "gap_query_generations",
     "gap_extractions",
     "report_generations",
     "editorial_generations",
     "report_repairs",
 ];
 
-const GENERATED_SEMANTIC_OUTLINE_FIELDS: [&str; 6] = [
+const GENERATED_SEMANTIC_OUTLINE_FIELDS: [&str; 7] = [
     "report_title",
     "research_scope",
     "freshness_required",
     "workspace_evidence_required",
+    "request_requirements",
     "tracks",
     "supplemental_queries",
 ];
-const SEMANTIC_OUTLINE_FIELDS: [&str; 7] = [
+const SEMANTIC_OUTLINE_FIELDS: [&str; 8] = [
     "report_title",
     "research_scope",
     "freshness_required",
     "workspace_evidence_required",
+    "request_requirements",
     "tracks",
     "supplemental_queries",
     "stop_conditions",
 ];
-const TRACK_IDENTITY_FIELDS: [&str; 7] = [
+const TRACK_IDENTITY_FIELDS: [&str; 8] = [
     "id",
     "title",
     "focus",
     "material",
+    "requirement_ids",
     "completion_criteria",
     "questions",
     "evidence_requirements",
@@ -147,7 +151,8 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
     for (field, expected) in [
         ("outline_generations", 1),
         ("initial_extractions", 1),
-        ("gap_extractions", 1),
+        ("gap_query_generations", MAX_GAP_ROUNDS),
+        ("gap_extractions", MAX_GAP_ROUNDS),
         ("report_generations", 1),
         ("editorial_generations", 1),
         ("report_repairs", 1),
@@ -195,7 +200,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         planner,
         "timeout_ms",
         1_000,
-        PLANNER_OUTLINE_ATTEMPT_TIMEOUT_MS,
+        DEFAULT_PLANNER_ATTEMPT_TIMEOUT_MS,
         "Loop Engineering planner",
     )?;
     if !planner.get("output_schema").is_some_and(Value::is_object) {
@@ -207,7 +212,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         .get("output_schema")
         .and_then(|schema| schema.pointer("/properties/tracks/maxItems"))
         .and_then(Value::as_u64)
-        .filter(|maximum| (1..=4).contains(maximum))
+        .filter(|maximum| (1..=MAX_PLANNER_TRACK_EFFECTS).contains(maximum))
         .ok_or_else(|| {
             "DeepResearch planner output schema omitted a bounded track maximum".to_string()
         })?;
@@ -243,6 +248,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         &[
             "max_tracks",
             "max_searches",
+            "max_gap_searches",
             "max_fetches",
             "max_supplemental_fetches",
             "retrieval_timeout_ms",
@@ -253,7 +259,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
         hard_caps,
         "max_tracks",
         1,
-        4,
+        MAX_PLANNER_TRACK_EFFECTS,
         "Loop Engineering safety fuses",
     )?;
     if schema_max_tracks != max_tracks {
@@ -263,6 +269,7 @@ pub fn validated_loop_planner(workflow_args: &Value) -> Result<&Map<String, Valu
     }
     for (field, expected) in [
         ("max_searches", MAX_PLANNER_SEARCHES),
+        ("max_gap_searches", MAX_GAP_SEARCHES),
         ("max_fetches", MAX_PLANNER_INITIAL_FETCHES),
         (
             "max_supplemental_fetches",
@@ -308,6 +315,8 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
     let research_scope = required_research_scope(object, "semantic outline")?;
     required_bool(object, "freshness_required", "semantic outline")?;
     required_bool(object, "workspace_evidence_required", "semantic outline")?;
+    let request_requirement_ids = validated_request_requirements(object, true)?
+        .ok_or_else(|| "DeepResearch semantic outline omitted request requirements".to_string())?;
     exact_string_array(
         object.get("supplemental_queries"),
         "supplemental_queries",
@@ -335,6 +344,7 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
         ));
     }
     let mut ids = BTreeSet::new();
+    let mut mapped_requirement_ids = BTreeSet::new();
     let mut material = false;
     for track in tracks {
         let track = track.as_object().ok_or_else(|| {
@@ -353,6 +363,11 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
         required_text(track, "title")?;
         required_text(track, "focus")?;
         material |= required_bool(track, "material", "outline track identity")?;
+        mapped_requirement_ids.extend(validated_track_requirement_ids(
+            track,
+            Some(&request_requirement_ids),
+            true,
+        )?);
         let completion_criteria = string_array(
             track.get("completion_criteria"),
             "outline track completion_criteria",
@@ -395,6 +410,11 @@ fn semantic_outline_track_targets(outline: &Value) -> Result<Vec<Value>, String>
     if !material {
         return Err("DeepResearch semantic outline has no material track".to_string());
     }
+    validate_request_requirement_coverage(
+        &request_requirement_ids,
+        &mapped_requirement_ids,
+        "semantic outline",
+    )?;
     validate_structured_plan_question_roles(tracks, research_scope)?;
     Ok(tracks.clone())
 }
@@ -411,6 +431,7 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
             "research_scope",
             "freshness_required",
             "workspace_evidence_required",
+            "request_requirements",
             "tracks",
             "search_queries",
             "seed_urls",
@@ -423,6 +444,7 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
     let research_scope = required_research_scope(object, "plan")?;
     required_bool(object, "freshness_required", "plan")?;
     required_bool(object, "workspace_evidence_required", "plan")?;
+    let request_requirement_ids = validated_request_requirements(object, false)?;
     let _search_queries = exact_string_array(
         object.get("search_queries"),
         "search_queries",
@@ -471,6 +493,7 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
             MAX_PLANNER_TRACK_EFFECTS
         ));
     }
+    let mut mapped_requirement_ids = BTreeSet::new();
     for track in tracks {
         let track = track
             .as_object()
@@ -482,6 +505,7 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
                 "title",
                 "focus",
                 "material",
+                "requirement_ids",
                 "questions",
                 "completion_criteria",
                 "evidence_requirements",
@@ -489,6 +513,11 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
             "track",
         )?;
         required_bool(track, "material", "track")?;
+        mapped_requirement_ids.extend(validated_track_requirement_ids(
+            track,
+            request_requirement_ids.as_ref(),
+            request_requirement_ids.is_some(),
+        )?);
         let completion_criteria = string_array(
             track.get("completion_criteria"),
             "track completion_criteria",
@@ -519,6 +548,13 @@ pub fn validate_plan(value: Value) -> Result<PlannedInquiry, String> {
                 "independent_corroboration_required",
             ],
             "track evidence requirements",
+        )?;
+    }
+    if let Some(request_requirement_ids) = request_requirement_ids.as_ref() {
+        validate_request_requirement_coverage(
+            request_requirement_ids,
+            &mapped_requirement_ids,
+            "plan",
         )?;
     }
     validate_structured_plan_question_roles(tracks, research_scope)?;

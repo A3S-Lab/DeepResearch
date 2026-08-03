@@ -332,6 +332,7 @@ fn typed_compiler_reader_labels(labels: &TypedWireReportLabels) -> serde_json::V
 fn typed_material_dimensions_are_answered_or_bounded(
     context: &DeepResearchReportContext,
     catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     compiled: &crate::research::compiler::CompiledEvidenceReport,
 ) -> bool {
     let directly_answered = compiled
@@ -355,8 +356,12 @@ fn typed_material_dimensions_are_answered_or_bounded(
             let Some(dimension_id) = track.get("id").and_then(serde_json::Value::as_str) else {
                 return false;
             };
-            let fully_resolved =
-                typed_track_is_resolved_by_claim_support(track, catalog, compiled);
+            let fully_resolved = typed_track_is_resolved_by_claim_support(
+                track,
+                catalog,
+                attribution,
+                compiled,
+            );
             let explicitly_bounded = compiled.coverage.iter().any(|coverage| {
                 coverage.dimension_id == dimension_id
                     && matches!(
@@ -379,6 +384,7 @@ fn typed_material_dimensions_are_answered_or_bounded(
 fn typed_material_dimensions_needing_claim_gap(
     context: &DeepResearchReportContext,
     catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     compiled: &crate::research::compiler::CompiledEvidenceReport,
 ) -> Vec<String> {
     context
@@ -400,11 +406,19 @@ fn typed_material_dimensions_needing_claim_gap(
                             | crate::research::compiler::CompilerStructuralCoverage::GapOnly
                     )
             });
-            let resolved_by_claim_support =
-                typed_track_is_resolved_by_claim_support(track, catalog, compiled);
+            let resolved_by_claim_support = typed_track_is_resolved_by_claim_support(
+                track,
+                catalog,
+                attribution,
+                compiled,
+            );
             let needs_depth_gap = context.scope == DeepResearchReportScope::Comprehensive
                 && resolved_by_claim_support
-                && !typed_compiled_dimension_has_required_depth(dimension_id, compiled);
+                && !typed_compiled_dimension_has_required_depth(
+                    dimension_id,
+                    attribution,
+                    compiled,
+                );
             (!already_bounded && (!resolved_by_claim_support || needs_depth_gap))
                 .then(|| dimension_id.to_string())
         })
@@ -414,6 +428,7 @@ fn typed_material_dimensions_needing_claim_gap(
 fn typed_track_is_resolved_by_claim_support(
     track: &serde_json::Value,
     catalog: &DeepResearchSourceCatalog,
+    attribution: Option<&DeepResearchSourceAttribution>,
     compiled: &crate::research::compiler::CompiledEvidenceReport,
 ) -> bool {
     let Some(dimension_id) = track.get("id").and_then(serde_json::Value::as_str) else {
@@ -437,6 +452,11 @@ fn typed_track_is_resolved_by_claim_support(
         .map(Vec::len)
         .unwrap_or_default();
     criterion_count > 0
-        && report_track_coverage_state(track, catalog, &source_indexes)
+        && report_track_coverage_state_with_attribution(
+            track,
+            catalog,
+            &source_indexes,
+            attribution,
+        )
             .is_some_and(|state| state.is_resolved(criterion_count))
 }

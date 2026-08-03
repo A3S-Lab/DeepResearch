@@ -542,6 +542,69 @@ fn material_track_roles_cannot_be_conflated_across_completion_criteria() {
 }
 
 #[test]
+fn independent_coverage_requires_a_positive_attribution_pair() {
+    let mut context = criterion_scoped_role_fixture().0;
+    context.tracks[0]["completion_criteria"] =
+        serde_json::json!(["The criterion is independently established."]);
+    let catalog = DeepResearchSourceCatalog {
+        sources: vec![
+            coverage_source("source-1", "evidence.boundary", &[0], true, false),
+            coverage_source("source-2", "evidence.boundary", &[0], false, true),
+        ],
+        omitted_source_count: 0,
+        omitted_chunk_count: 0,
+    };
+    let source_indexes = [0usize, 1usize].into_iter().collect::<HashSet<_>>();
+    let same_origin = DeepResearchSourceAttribution {
+        source_group_ids: [
+            ("source-1".to_string(), "attribution-group-1".to_string()),
+            ("source-2".to_string(), "attribution-group-1".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        independent_group_pairs: std::collections::BTreeSet::new(),
+    };
+    let state = report_track_coverage_state_with_attribution(
+        &context.tracks[0],
+        &catalog,
+        &source_indexes,
+        Some(&same_origin),
+    )
+    .expect("same-origin coverage state");
+    assert!(state.resolved_criterion_indexes.is_empty());
+    assert_eq!(
+        state.missing_independent_corroboration_criterion_indexes,
+        [0]
+    );
+
+    let verified = DeepResearchSourceAttribution {
+        source_group_ids: [
+            ("source-1".to_string(), "attribution-group-1".to_string()),
+            ("source-2".to_string(), "attribution-group-2".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        independent_group_pairs: [(
+            "attribution-group-1".to_string(),
+            "attribution-group-2".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    };
+    let state = report_track_coverage_state_with_attribution(
+        &context.tracks[0],
+        &catalog,
+        &source_indexes,
+        Some(&verified),
+    )
+    .expect("verified coverage state");
+    assert_eq!(state.resolved_criterion_indexes, [0]);
+    assert!(state
+        .missing_independent_corroboration_criterion_indexes
+        .is_empty());
+}
+
+#[test]
 fn proposal_packet_exposes_exact_criterion_scoped_role_gaps() {
     let (context, catalog) = criterion_scoped_role_fixture();
     let prompt = deep_research_report_proposal_prompt_at(

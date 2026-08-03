@@ -10,9 +10,21 @@ use crate::planner::deep_research_loop_contract_for_language;
 use crate::report::validate_deep_research_run_id;
 use crate::workflow::retrieval_workflow_source;
 
+use super::{DEFAULT_MAX_CONCURRENT_GENERATIONS, DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS};
+
 const MAX_QUERY_CHARS: usize = 16_000;
 const MAX_WORKSPACE_SOURCE_HINTS: usize = 8;
 const MAX_WORKSPACE_SOURCE_PATH_CHARS: usize = 1_200;
+const MIN_DEEP_RESEARCH_TRACKS: u8 = 1;
+pub const MAX_DEEP_RESEARCH_TRACKS: u8 = 8;
+const MIN_LOCAL_MAX_STEPS: u8 = 1;
+const MAX_LOCAL_MAX_STEPS: u8 = 4;
+const MIN_WORKFLOW_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_LOCAL_WORKFLOW_TIMEOUT_MS: u64 = 210_000;
+const MIN_TOOL_CALLS: u16 = 4;
+const MAX_TOOL_CALLS: u16 = 240;
+const MIN_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,22 +103,50 @@ pub struct DeepResearchRequestLimits {
 impl Default for DeepResearchRequestLimits {
     fn default() -> Self {
         Self {
-            max_tracks: 4,
-            local_max_steps: 4,
-            workflow_timeout_ms: 600_000,
-            max_tool_calls: 240,
-            max_output_bytes: 2 * 1024 * 1024,
+            max_tracks: MAX_DEEP_RESEARCH_TRACKS,
+            local_max_steps: MAX_LOCAL_MAX_STEPS,
+            workflow_timeout_ms: DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS,
+            max_tool_calls: MAX_TOOL_CALLS,
+            max_output_bytes: MAX_OUTPUT_BYTES,
         }
     }
 }
 
 impl DeepResearchRequestLimits {
+    pub fn for_evidence_scope(evidence_scope: EvidenceScope) -> Self {
+        let mut limits = Self::default();
+        if !evidence_scope.network_enabled() {
+            limits.workflow_timeout_ms = DEFAULT_LOCAL_WORKFLOW_TIMEOUT_MS;
+        }
+        limits
+    }
+
+    pub fn with_bounded_execution_budget(
+        mut self,
+        local_max_steps: usize,
+        max_tool_calls: usize,
+        max_output_bytes: usize,
+    ) -> Self {
+        self.local_max_steps = u8::try_from(local_max_steps.clamp(
+            usize::from(MIN_LOCAL_MAX_STEPS),
+            usize::from(MAX_LOCAL_MAX_STEPS),
+        ))
+        .unwrap_or(MAX_LOCAL_MAX_STEPS);
+        self.max_tool_calls = u16::try_from(
+            max_tool_calls.clamp(usize::from(MIN_TOOL_CALLS), usize::from(MAX_TOOL_CALLS)),
+        )
+        .unwrap_or(MAX_TOOL_CALLS);
+        self.max_output_bytes = max_output_bytes.clamp(MIN_OUTPUT_BYTES, MAX_OUTPUT_BYTES);
+        self
+    }
+
     fn validate(self) -> Result<(), String> {
-        if !(1..=4).contains(&self.max_tracks)
-            || !(1..=4).contains(&self.local_max_steps)
-            || !(30_000..=600_000).contains(&self.workflow_timeout_ms)
-            || !(4..=240).contains(&self.max_tool_calls)
-            || !(256 * 1024..=2 * 1024 * 1024).contains(&self.max_output_bytes)
+        if !(MIN_DEEP_RESEARCH_TRACKS..=MAX_DEEP_RESEARCH_TRACKS).contains(&self.max_tracks)
+            || !(MIN_LOCAL_MAX_STEPS..=MAX_LOCAL_MAX_STEPS).contains(&self.local_max_steps)
+            || !(MIN_WORKFLOW_TIMEOUT_MS..=DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS)
+                .contains(&self.workflow_timeout_ms)
+            || !(MIN_TOOL_CALLS..=MAX_TOOL_CALLS).contains(&self.max_tool_calls)
+            || !(MIN_OUTPUT_BYTES..=MAX_OUTPUT_BYTES).contains(&self.max_output_bytes)
         {
             return Err(
                 "DeepResearch request limits exceed the closed retrieval safety envelope"
@@ -146,7 +186,7 @@ impl DeepResearchRequest {
             current_date: chrono::Local::now().date_naive().to_string(),
             evidence_scope,
             workspace_source_hints: Vec::new(),
-            limits: DeepResearchRequestLimits::default(),
+            limits: DeepResearchRequestLimits::for_evidence_scope(evidence_scope),
         }
     }
 
@@ -233,7 +273,7 @@ impl DeepResearchRequest {
                 "timeoutMs": self.limits.workflow_timeout_ms,
                 "maxToolCalls": self.limits.max_tool_calls,
                 "maxOutputBytes": self.limits.max_output_bytes,
-                "maxConcurrentGenerations": 2,
+                "maxConcurrentGenerations": DEFAULT_MAX_CONCURRENT_GENERATIONS,
             }
         }))
     }
@@ -272,7 +312,14 @@ mod tests {
             "Assess the migration"
         );
         assert_eq!(arguments["limits"]["maxToolCalls"], 240);
-        assert_eq!(arguments["limits"]["maxConcurrentGenerations"], 2);
+        assert_eq!(
+            arguments["limits"]["maxConcurrentGenerations"],
+            DEFAULT_MAX_CONCURRENT_GENERATIONS
+        );
+        assert_eq!(
+            arguments["limits"]["timeoutMs"],
+            DEFAULT_LOCAL_WORKFLOW_TIMEOUT_MS
+        );
         assert_eq!(arguments["input"]["output_language"], "en");
         assert!(arguments["input"]["loop_contract"]["planner"]["prompt"]
             .as_str()
@@ -355,5 +402,42 @@ mod tests {
         let request = DeepResearchRequest::new("../run", "query", EvidenceScope::WebAndWorkspace)
             .with_current_date("2026-07-25");
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn request_limits_are_scope_driven_and_share_one_bounding_policy() {
+        let web = DeepResearchRequestLimits::for_evidence_scope(EvidenceScope::WebAndWorkspace);
+        let local = DeepResearchRequestLimits::for_evidence_scope(EvidenceScope::LocalOnly);
+
+        assert_eq!(
+            web.workflow_timeout_ms,
+            DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS
+        );
+        assert_eq!(local.workflow_timeout_ms, DEFAULT_LOCAL_WORKFLOW_TIMEOUT_MS);
+
+        let lower_bounded = local.with_bounded_execution_budget(0, 0, 0);
+        assert_eq!(lower_bounded.local_max_steps, MIN_LOCAL_MAX_STEPS);
+        assert_eq!(lower_bounded.max_tool_calls, MIN_TOOL_CALLS);
+        assert_eq!(lower_bounded.max_output_bytes, MIN_OUTPUT_BYTES);
+
+        let upper_bounded = web.with_bounded_execution_budget(usize::MAX, usize::MAX, usize::MAX);
+        assert_eq!(upper_bounded.local_max_steps, MAX_LOCAL_MAX_STEPS);
+        assert_eq!(upper_bounded.max_tool_calls, MAX_TOOL_CALLS);
+        assert_eq!(upper_bounded.max_output_bytes, MAX_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn request_validation_accepts_the_shared_retrieval_budget_and_rejects_larger_values() {
+        let accepted = DeepResearchRequest::new(
+            "run-budget-accepted",
+            "Assess the migration",
+            EvidenceScope::WebAndWorkspace,
+        );
+        assert!(accepted.validate().is_ok());
+
+        let mut rejected = accepted;
+        rejected.limits.workflow_timeout_ms =
+            DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS.saturating_add(1);
+        assert!(rejected.validate().is_err());
     }
 }
