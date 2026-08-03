@@ -32,8 +32,8 @@ const RELEASE_VERSION_ENV: &str = "A3S_DEEP_RESEARCH_RELEASE_VERSION";
 const RELEASE_PACKAGE_ENV: &str = "A3S_DEEP_RESEARCH_RELEASE_PACKAGE";
 
 #[test]
-#[ignore = "external signed commercial holdout; run only as verifier defense in depth"]
-fn independent_commercial_holdout_meets_the_predeclared_release_floor() {
+#[ignore = "requires an explicitly supplied signed commercial holdout"]
+fn signed_commercial_holdout_meets_the_predeclared_release_floor() {
     let plan_bytes = std::fs::read(required_path(PLAN_ENV)).expect("read signed holdout plan");
     let result_bytes =
         std::fs::read(required_path(RESULT_ENV)).expect("read signed holdout result");
@@ -341,7 +341,7 @@ fn required_string(variable: &str) -> String {
     std::env::var(variable)
         .ok()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| panic!("set {variable} for the local holdout verifier"))
+        .unwrap_or_else(|| panic!("set {variable} for the signed holdout validator"))
 }
 
 fn required_path(variable: &str) -> PathBuf {

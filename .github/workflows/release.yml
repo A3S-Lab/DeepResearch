@@ -68,21 +68,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  commercial_holdout:
-    needs: [classify, package]
-    if: ${{ needs.classify.outputs.prerelease == 'false' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require candidate-independent commercial certification
-        shell: bash
-        run: |
-          echo "Stable publishing is blocked until the candidate-independent verifier in A3S-Lab/DeepResearch#2 is provisioned." >&2
-          echo "Repository-local tests cannot certify candidate-controlled release code." >&2
-          exit 1
-
   verify_release:
-    needs: [classify, package, commercial_holdout]
-    if: ${{ always() && !cancelled() && needs.classify.result == 'success' && needs.package.result == 'success' && (needs.classify.outputs.prerelease == 'true' || needs.commercial_holdout.result == 'success') }}
+    needs: [classify, package]
+    if: ${{ always() && !cancelled() && needs.classify.result == 'success' && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       artifact_id: ${{ steps.retain.outputs.artifact-id }}

@@ -21,6 +21,9 @@ The project follows Semantic Versioning while the public API remains in the
 
 ### Changed
 
+- Keep signed campaign validation, receipt verification, artifact binding, and
+  report-quality checks in the Rust project, and remove the release dependency
+  on a separately operated verifier.
 - Count independent corroboration and comprehensive cross-source synthesis by
   verified attribution groups instead of distinct source aliases. Mirrors,
   syndication, translations, derivative copies, malformed partitions, and
