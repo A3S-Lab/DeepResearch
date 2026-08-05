@@ -7,6 +7,8 @@ The project follows Semantic Versioning while the public API remains in the
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-06
+
 ### Added
 
 - Add a global, byte-bounded source-attribution review over each changed
@@ -204,4 +206,5 @@ The project follows Semantic Versioning while the public API remains in the
 [0.1.1]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.0...v0.1.1
 [0.1.2]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.1...v0.1.2
 [0.1.3]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.2...v0.1.3
-[Unreleased]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.3...HEAD
+[0.1.4]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.3...v0.1.4
+[Unreleased]: https://github.com/A3S-Lab/DeepResearch/compare/v0.1.4...HEAD
