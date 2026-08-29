@@ -414,6 +414,29 @@ article {
   margin-top: 3px;
 }
 
+.source-evidence {
+  margin: 14px 0;
+  overflow: clip;
+  background: var(--a3s-panel-soft);
+  border: 1px solid var(--a3s-line);
+  border-radius: 8px;
+}
+
+.source-evidence summary {
+  padding: 14px 16px;
+  cursor: pointer;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.source-evidence[open] summary {
+  border-bottom: 1px solid var(--a3s-line);
+}
+
+.source-evidence__body {
+  padding: 4px 16px 16px;
+}
+
 .citation {
   display: inline-flex;
   min-width: 1.6rem;
@@ -619,6 +642,17 @@ th {
   border-top: 1px solid var(--a3s-line);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .footer-note {
   margin: 0;
   padding: 18px 64px;
@@ -705,6 +739,8 @@ th {
   }
 
   .report-column {
+    width: 100%;
+    max-width: 100%;
     border-right: 0;
     border-left: 0;
     border-radius: 0;
@@ -759,6 +795,7 @@ th {
   .footer-note {
     padding: 15px 20px;
   }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -856,7 +893,8 @@ th {
   .report-paragraph,
   .traceability,
   .limitations,
-  .relations {
+  .relations,
+  .research-visual {
     break-inside: avoid;
     background: #ffffff;
   }

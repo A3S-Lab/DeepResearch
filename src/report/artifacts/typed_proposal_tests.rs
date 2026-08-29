@@ -299,3 +299,5 @@ fn with_narrative(
 include!("typed_proposal_tests/depth.rs");
 include!("typed_proposal_tests/editorial.rs");
 include!("typed_proposal_tests/validation.rs");
+include!("typed_proposal_tests/repair.rs");
+include!("typed_proposal_tests/visualization.rs");

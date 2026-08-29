@@ -24,7 +24,7 @@ use projection::{
 
 struct ActiveReplayRuntime {
     outline: Value,
-    report: Mutex<Option<Result<Value, String>>>,
+    report: Result<Value, String>,
     bootstrap: WorkflowOutput,
     planned: WorkflowOutput,
     workspace: PathBuf,
@@ -45,7 +45,7 @@ impl ActiveReplayRuntime {
         };
         Self {
             outline: planner_outline(replay),
-            report: Mutex::new(Some(report)),
+            report,
             bootstrap: bootstrap_output(replay),
             planned: planned_output(replay),
             workspace,
@@ -151,12 +151,7 @@ impl StructuredGenerationPort for ActiveReplayRuntime {
             .push(request.clone());
         match request.stage {
             GenerationStage::Planning => Ok(self.outline.clone()),
-            GenerationStage::Report => self
-                .report
-                .lock()
-                .expect("report result lock")
-                .take()
-                .expect("one report request"),
+            GenerationStage::Report => self.report.clone(),
             GenerationStage::Editorial => passing_editorial_plan(&request.arguments),
         }
     }
@@ -278,6 +273,35 @@ fn frozen_corpus_reaches_the_active_engine_with_exact_identity_control() {
         }));
         drop(workflow_requests);
 
+        let generation_requests = runtime
+            .generation_requests
+            .lock()
+            .expect("generation requests lock");
+        let report_requests = generation_requests
+            .iter()
+            .filter(|request| request.stage == GenerationStage::Report)
+            .collect::<Vec<_>>();
+        assert!(
+            (1..=2).contains(&report_requests.len()),
+            "{}: report generation must use only the initial attempt and one bounded repair",
+            replay.id
+        );
+        if let Some(repair) = report_requests.get(1) {
+            assert_eq!(
+                repair.arguments["schema_name"], "deep_research_typed_claim_graph_repair",
+                "{}",
+                replay.id
+            );
+            assert!(
+                repair.arguments["prompt"]
+                    .as_str()
+                    .is_some_and(|prompt| prompt.contains("HOST_GATE_DIAGNOSTICS=")),
+                "{}",
+                replay.id
+            );
+        }
+        drop(generation_requests);
+
         let proposal = report_proposal(&replay).to_string();
         for forbidden in &replay.forbidden_statements {
             assert!(
@@ -300,6 +324,11 @@ fn frozen_corpus_reaches_the_active_engine_with_exact_identity_control() {
         outcomes.push((replay.id, run.publication));
     }
 
+    // F02 and F08 remain useful compiler fixtures, but their active-engine
+    // projections leave one material dimension without its own conclusion.
+    // The commercial report gate now attempts one repair and then preserves
+    // the durable source-backed artifact instead of publishing that shallow
+    // projection as a synthesized report.
     assert_eq!(
         outcomes,
         [
@@ -309,7 +338,7 @@ fn frozen_corpus_reaches_the_active_engine_with_exact_identity_control() {
             ),
             (
                 "F02".to_string(),
-                DeepResearchEvidenceFirstPublication::Synthesized,
+                DeepResearchEvidenceFirstPublication::SourceBacked,
             ),
             (
                 "F03".to_string(),
@@ -333,7 +362,7 @@ fn frozen_corpus_reaches_the_active_engine_with_exact_identity_control() {
             ),
             (
                 "F08".to_string(),
-                DeepResearchEvidenceFirstPublication::Synthesized,
+                DeepResearchEvidenceFirstPublication::SourceBacked,
             ),
         ]
     );

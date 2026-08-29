@@ -37,7 +37,7 @@ fn report_generation_timeout_scales_with_the_closed_payload() {
 
 struct FakeRuntime {
     planning: Mutex<Option<Result<Value, String>>>,
-    report: Mutex<Option<Result<Value, String>>>,
+    report: Mutex<std::collections::VecDeque<Result<Value, String>>>,
     editorial: Mutex<Option<Result<Value, String>>>,
     generation_requests: Mutex<Vec<GenerationRequest>>,
     bootstrap: WorkflowOutput,
@@ -68,7 +68,7 @@ impl FakeRuntime {
         });
         Self {
             planning: Mutex::new(Some(planning)),
-            report: Mutex::new(report),
+            report: Mutex::new(report.into_iter().collect()),
             editorial: Mutex::new(editorial),
             generation_requests: Mutex::new(Vec::new()),
             bootstrap,
@@ -102,6 +102,14 @@ impl FakeRuntime {
 
     fn with_editorial(self, editorial: Result<Value, String>) -> Self {
         *self.editorial.lock().expect("editorial result lock") = Some(editorial);
+        self
+    }
+
+    fn with_report_repair(self, repair: Result<Value, String>) -> Self {
+        self.report
+            .lock()
+            .expect("report result lock")
+            .push_back(repair);
         self
     }
 }
@@ -174,8 +182,8 @@ impl StructuredGenerationPort for FakeRuntime {
                 .report
                 .lock()
                 .expect("report result lock")
-                .take()
-                .expect("one report request"),
+                .pop_front()
+                .unwrap_or_else(|| Err("no scripted report generation result".to_string())),
             GenerationStage::Editorial => self
                 .editorial
                 .lock()

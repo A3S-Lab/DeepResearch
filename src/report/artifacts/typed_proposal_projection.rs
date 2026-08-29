@@ -381,48 +381,61 @@ fn typed_material_dimensions_are_answered_or_bounded(
         })
 }
 
+#[derive(Debug, Default)]
+struct TypedMaterialClaimGaps {
+    dimension_ids: Vec<String>,
+    support_bounded_dimension_ids: HashSet<String>,
+}
+
 fn typed_material_dimensions_needing_claim_gap(
     context: &DeepResearchReportContext,
     catalog: &DeepResearchSourceCatalog,
     attribution: Option<&DeepResearchSourceAttribution>,
     compiled: &crate::research::compiler::CompiledEvidenceReport,
-) -> Vec<String> {
-    context
-        .tracks
-        .iter()
-        .filter(|track| {
+) -> TypedMaterialClaimGaps {
+    let mut gaps = TypedMaterialClaimGaps::default();
+    for track in context.tracks.iter().filter(|track| {
             track
                 .get("material")
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
-        })
-        .filter_map(|track| {
-            let dimension_id = track.get("id").and_then(serde_json::Value::as_str)?;
-            let already_bounded = compiled.coverage.iter().any(|coverage| {
-                coverage.dimension_id == dimension_id
-                    && matches!(
-                        coverage.status,
-                        crate::research::compiler::CompilerStructuralCoverage::ClaimsAndGap
-                            | crate::research::compiler::CompilerStructuralCoverage::GapOnly
-                    )
-            });
-            let resolved_by_claim_support = typed_track_is_resolved_by_claim_support(
-                track,
-                catalog,
+        }) {
+        let Some(dimension_id) = track.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let already_bounded = compiled.coverage.iter().any(|coverage| {
+            coverage.dimension_id == dimension_id
+                && matches!(
+                    coverage.status,
+                    crate::research::compiler::CompilerStructuralCoverage::ClaimsAndGap
+                        | crate::research::compiler::CompilerStructuralCoverage::GapOnly
+                )
+        });
+        if already_bounded {
+            continue;
+        }
+        let resolved_by_claim_support = typed_track_is_resolved_by_claim_support(
+            track,
+            catalog,
+            attribution,
+            compiled,
+        );
+        let needs_depth_gap = context.scope == DeepResearchReportScope::Comprehensive
+            && resolved_by_claim_support
+            && !typed_compiled_dimension_has_required_depth(
+                dimension_id,
                 attribution,
                 compiled,
             );
-            let needs_depth_gap = context.scope == DeepResearchReportScope::Comprehensive
-                && resolved_by_claim_support
-                && !typed_compiled_dimension_has_required_depth(
-                    dimension_id,
-                    attribution,
-                    compiled,
-                );
-            (!already_bounded && (!resolved_by_claim_support || needs_depth_gap))
-                .then(|| dimension_id.to_string())
-        })
-        .collect()
+        if !resolved_by_claim_support || needs_depth_gap {
+            gaps.dimension_ids.push(dimension_id.to_string());
+            if !resolved_by_claim_support {
+                gaps.support_bounded_dimension_ids
+                    .insert(dimension_id.to_string());
+            }
+        }
+    }
+    gaps
 }
 
 fn typed_track_is_resolved_by_claim_support(

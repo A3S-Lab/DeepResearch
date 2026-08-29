@@ -291,7 +291,7 @@ fn typed_narrative_has_required_depth(
             .get("material")
             .and_then(serde_json::Value::as_bool)
             == Some(true);
-        if !material || unresolved_dimension_ids.contains(dimension_id) {
+        if !material {
             return true;
         }
         let Some(section) = wire
@@ -340,8 +340,15 @@ fn typed_narrative_has_required_depth(
                 })
                 .count()
         };
-        if !has_conclusion
-            || evidence_findings < COMPREHENSIVE_DIMENSION_MIN_FACT_FINDINGS
+        let unresolved = unresolved_dimension_ids.contains(dimension_id);
+        let partial_analysis_expected = unresolved
+            && evidence_findings >= COMPREHENSIVE_PARTIAL_DIMENSION_MIN_FACT_FINDINGS;
+        if unresolved && !partial_analysis_expected {
+            return true;
+        }
+        if (!unresolved
+            && (!has_conclusion
+                || evidence_findings < COMPREHENSIVE_DIMENSION_MIN_FACT_FINDINGS))
             || role_count(&["comparison"]) < COMPREHENSIVE_DIMENSION_MIN_COMPARISONS
             || role_count(&["explanation"]) < COMPREHENSIVE_DIMENSION_MIN_EXPLANATIONS
             || role_count(&["implication"]) < COMPREHENSIVE_DIMENSION_MIN_IMPLICATIONS

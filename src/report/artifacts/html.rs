@@ -1,13 +1,20 @@
-use super::{html_escape, markdown_backslash_unescape, markdown_plain_text};
-use crate::report::html_host::{render_report_menu, report_host_script_element, REPORT_HOST_CSS};
+use super::{
+    deep_research_artifact_kind, html_escape, markdown_backslash_unescape, markdown_plain_text,
+};
+use crate::report::html_host::{
+    render_evidence_snapshot_menu, render_report_menu, report_host_script_element, REPORT_HOST_CSS,
+};
 use crate::report::html_style::REPORT_CSS;
 use crate::report::report_generation::ReportPresentation;
 use comrak::{markdown_to_html, Options};
 
 #[path = "html_composition.rs"]
 mod composition;
+#[path = "html_visual_style.rs"]
+mod visual_style;
 
 use composition::compose_report_fragment;
+use visual_style::REPORT_VISUAL_CSS;
 
 pub(super) const DEEP_RESEARCH_HTML_DOCUMENT_ATTR: &str = r#"data-a3s-deep-research-document="v1""#;
 
@@ -79,8 +86,15 @@ fn deep_research_report_html_with_state(
     let labels = report_labels(degraded, output_language);
     let language = output_language;
     let raw_body = strip_first_h1(&deep_research_markdown_to_html_fragment(markdown));
-    let composition = compose_report_fragment(&raw_body, &[], labels.contents, labels.contents);
-    let report_menu = render_report_menu(language, labels.evidence, Some(labels.confidence));
+    let mut composition = compose_report_fragment(&raw_body, &[], labels.contents, labels.contents);
+    if degraded {
+        composition.body = fold_degraded_source_entries(&composition.body);
+    }
+    let report_menu = if degraded {
+        render_evidence_snapshot_menu(language, labels.evidence, Some(labels.confidence))
+    } else {
+        render_report_menu(language, labels.evidence, Some(labels.confidence))
+    };
     let host_script = report_host_script_element();
     let body_class = if degraded {
         "a3s-report report-degraded"
@@ -94,7 +108,7 @@ fn deep_research_report_html_with_state(
     format!(
         r##"<!doctype html>
 <html lang="{language}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><style>:root{{--table-scroll-hint:'{table_scroll_hint}';}}{css}{host_css}</style></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><style>:root{{--table-scroll-hint:'{table_scroll_hint}';}}{css}{visual_css}{host_css}</style></head>
 <body class="{theme}" data-a3s-report-state="readonly">
 <a class="skip-link" href="#report-main">{skip_to_report}</a>
 <div class="report-shell">
@@ -112,6 +126,7 @@ fn deep_research_report_html_with_state(
         language = language,
         title = html_escape(&title),
         css = REPORT_CSS,
+        visual_css = REPORT_VISUAL_CSS,
         host_css = REPORT_HOST_CSS,
         table_scroll_hint = labels.table_scroll_hint,
         theme = body_class,
@@ -142,7 +157,7 @@ fn report_labels(degraded: bool, output_language: &str) -> ReportLabels {
     if crate::language::primary_output_language(output_language) == "zh" {
         ReportLabels {
             brief: if degraded {
-                "A3S 深度研究 · 降级"
+                "A3S 深度研究 · 证据快照"
             } else {
                 "A3S 深度研究"
             },
@@ -156,19 +171,27 @@ fn report_labels(degraded: bool, output_language: &str) -> ReportLabels {
             } else {
                 "已说明置信度与边界"
             },
-            contents: "报告目录",
+            contents: if degraded {
+                "证据索引"
+            } else {
+                "报告目录"
+            },
             fallback_thesis: if degraded {
                 "本次研究未通过证据准入门槛；此页面仅保留可追溯来源、证据边界和后续核验线索。"
             } else {
                 "一份区分结论、证据强度与未决边界的来源支撑型研究报告。"
             },
             table_scroll_hint: "← 横向滑动查看全部列 →",
-            skip_to_report: "跳到报告正文",
+            skip_to_report: if degraded {
+                "跳到证据内容"
+            } else {
+                "跳到报告正文"
+            },
         }
     } else {
         ReportLabels {
             brief: if degraded {
-                "A3S Deep Research · Degraded"
+                "A3S Deep Research · Evidence snapshot"
             } else {
                 "A3S Deep Research"
             },
@@ -182,14 +205,22 @@ fn report_labels(degraded: bool, output_language: &str) -> ReportLabels {
             } else {
                 "Confidence & limits stated"
             },
-            contents: "Report contents",
+            contents: if degraded {
+                "Evidence index"
+            } else {
+                "Report contents"
+            },
             fallback_thesis: if degraded {
                 "This run did not meet the evidence gate; the page preserves only traceable sources, failure limits, and next actions."
             } else {
                 "A source-backed reading experience separating conclusions, evidence strength, and unresolved limits."
             },
             table_scroll_hint: "← swipe to inspect all columns →",
-            skip_to_report: "Skip to report",
+            skip_to_report: if degraded {
+                "Skip to evidence"
+            } else {
+                "Skip to report"
+            },
         }
     }
 }
@@ -238,7 +269,57 @@ fn deep_research_markdown_to_html_fragment(markdown: &str) -> String {
     options.extension.autolink = true;
     options.render.unsafe_ = false;
     options.render.escape = true;
-    strip_relative_report_links(&markdown_to_html(markdown, &options))
+    let reader_markdown = markdown
+        .lines()
+        .filter(|line| deep_research_artifact_kind(line).is_none())
+        .collect::<Vec<_>>()
+        .join("\n");
+    strip_relative_report_links(&markdown_to_html(&reader_markdown, &options))
+}
+
+fn fold_degraded_source_entries(fragment: &str) -> String {
+    let mut output = String::with_capacity(fragment.len());
+    let mut remaining = fragment;
+    while let Some(heading_start) = remaining.find("<h3>") {
+        output.push_str(&remaining[..heading_start]);
+        let heading = &remaining[heading_start + "<h3>".len()..];
+        let Some(heading_end) = heading.find("</h3>") else {
+            output.push_str(&remaining[heading_start..]);
+            return output;
+        };
+        let heading_html = &heading[..heading_end];
+        let heading_text = heading_html
+            .chars()
+            .filter(|character| !matches!(character, '<' | '>'))
+            .collect::<String>();
+        let content = &heading[heading_end + "</h3>".len()..];
+        if !numbered_source_heading(&heading_text) {
+            output.push_str(&format!("<h3>{heading_html}</h3>"));
+            remaining = content;
+            continue;
+        }
+        let next_heading = content.find("<h3>").unwrap_or(content.len());
+        let section_end = content.find("</div></section>").unwrap_or(content.len());
+        let content_end = next_heading.min(section_end);
+        let detail = content[..content_end].trim();
+        output.push_str(&format!(
+            "<details class=\"source-evidence\"><summary>{heading_html}</summary><div class=\"source-evidence__body\">{detail}</div></details>"
+        ));
+        remaining = &content[content_end..];
+    }
+    output.push_str(remaining);
+    output
+}
+
+fn numbered_source_heading(value: &str) -> bool {
+    let value = value.trim();
+    let Some(value) = value.strip_prefix('[') else {
+        return false;
+    };
+    let Some((number, _)) = value.split_once(']') else {
+        return false;
+    };
+    !number.is_empty() && number.chars().all(|character| character.is_ascii_digit())
 }
 
 fn strip_relative_report_links(fragment: &str) -> String {

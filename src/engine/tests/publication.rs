@@ -166,6 +166,68 @@ fn admitted_closed_evidence_report_replaces_the_staged_source_snapshot() {
 }
 
 #[test]
+fn rejected_report_receives_one_diagnostic_repair_before_editorial_review() {
+    let query = "Which Nimbus release is supported?";
+    let mut shallow = valid_report_proposal();
+    shallow["claims"] = serde_json::json!([shallow["claims"][1].clone()]);
+    let repaired = valid_report_proposal();
+    let repaired_editorial = passing_editorial_plan(&repaired);
+    let runtime = FakeRuntime::new(
+        Ok(valid_outline()),
+        Some(Ok(shallow)),
+        source_output(query),
+        inquiry_collection_source_output(query),
+    )
+    .with_report_repair(Ok(repaired))
+    .with_editorial(Ok(repaired_editorial));
+    let engine = DeepResearchEngine::new(&runtime, &runtime, &runtime, &runtime);
+
+    let run = futures::executor::block_on(engine.execute(workflow_args(query)))
+        .expect("a repaired report must proceed to editorial review and publication");
+
+    assert_eq!(
+        run.publication,
+        DeepResearchEvidenceFirstPublication::Synthesized
+    );
+    assert_eq!(
+        run.output["research"]["metadata"]["required_model_generation_count"],
+        3
+    );
+    assert_eq!(
+        run.output["research"]["metadata"]["model_generation_count"],
+        3
+    );
+    assert_eq!(
+        run.output["research"]["metadata"]["synthesis_mode"],
+        "model_claim_graph_repaired_editorial"
+    );
+    assert_eq!(
+        run.output["execution"]["maximum_report_generation_count"],
+        6
+    );
+
+    let requests = runtime
+        .generation_requests
+        .lock()
+        .expect("generation requests lock");
+    let report_requests = requests
+        .iter()
+        .filter(|request| request.stage == GenerationStage::Report)
+        .collect::<Vec<_>>();
+    assert_eq!(report_requests.len(), 2);
+    assert_eq!(
+        report_requests[1].arguments["schema_name"],
+        "deep_research_typed_claim_graph_repair"
+    );
+    let repair_prompt = report_requests[1].arguments["prompt"]
+        .as_str()
+        .expect("repair prompt");
+    assert!(repair_prompt.contains("missing_conclusion"));
+    assert!(repair_prompt.contains("support.boundary"));
+    assert!(repair_prompt.contains("Return one complete replacement object"));
+}
+
+#[test]
 fn editorial_success_changes_reader_flow_without_changing_admitted_claims() {
     const FINDING: &str =
         "The official Nimbus record identifies version 2 and September 2027 as the support boundary.";

@@ -67,6 +67,9 @@ fn comprehensive_report_requires_a_direct_answer_for_each_resolved_material_dime
     assert!(prompt.contains("write exactly one conclusion"));
     assert!(prompt.contains("one cross-source comparison"));
     assert!(prompt.contains("\"substantive_characters\":1200"));
+    assert!(prompt.contains("\"applies_when_evidence_facts_at_least\":2"));
+    assert!(prompt.contains("\"substantive_characters\":1000"));
+    assert!(prompt.contains("it is not a fact list"));
     assert!(!prompt.contains("\"substantive_characters\":800"));
 
     let mut proposal = serde_json::json!({
@@ -184,23 +187,19 @@ fn comprehensive_report_requires_a_direct_answer_for_each_resolved_material_dime
         "gaps": []
     });
 
-    let report = admit_deep_research_typed_report_proposal_at(
+    let incomplete = evaluate_deep_research_typed_report_draft_in_language_at(
         "research both material dimensions",
         "2026-07-24",
+        "en",
         &catalog,
         &context,
         with_narrative(proposal.clone(), &context),
     )
-    .expect("typed admission")
-    .expect("useful claims from the answered dimension must survive");
-
-    assert_eq!(
-        report.publication,
-        DeepResearchEvidenceFirstPublication::Qualified,
-        "the dimension without a direct answer must be bounded instead of presented as resolved"
-    );
-    assert_eq!(report.direct_answer_block_count, 1);
-    assert_eq!(report.accepted_gap_count, 1);
+    .expect("evaluate incomplete material dimension");
+    let TypedReportDraftAdmission::Rejected(diagnostics) = incomplete else {
+        panic!("a resolved material dimension must not be silently converted into a gap");
+    };
+    assert!(diagnostics.has_issue("request.second", "missing_conclusion"));
 
     proposal["claims"][3]["placement"] = serde_json::json!("direct_answer");
     proposal["claims"][3]["analysis_role"] = serde_json::json!("conclusion");
@@ -226,22 +225,19 @@ fn comprehensive_report_requires_a_direct_answer_for_each_resolved_material_dime
         "dimension_id": "request.second",
         "text": "The retained evidence leaves one bounded aspect of the second dimension unresolved."
     }]);
-    let redundant_gap = admit_deep_research_typed_report_proposal_at(
+    let redundant_gap = evaluate_deep_research_typed_report_draft_in_language_at(
         "research both material dimensions",
         "2026-07-24",
+        "en",
         &catalog,
         &context,
         with_narrative(proposal.clone(), &context),
     )
-    .expect("typed admission")
-    .expect("the Host-owned claim-depth gap must preserve useful claims");
-    assert_eq!(
-        redundant_gap.publication,
-        DeepResearchEvidenceFirstPublication::Qualified,
-        "a model-authored redundant gap cannot turn a claim-incomplete dimension into an answer"
-    );
-    assert_eq!(redundant_gap.direct_answer_block_count, 1);
-    assert_eq!(redundant_gap.accepted_gap_count, 1);
+    .expect("evaluate redundant model gap");
+    let TypedReportDraftAdmission::Rejected(diagnostics) = redundant_gap else {
+        panic!("a model-authored gap must not bypass the missing-conclusion gate");
+    };
+    assert!(diagnostics.has_issue("request.second", "missing_conclusion"));
 
     let mut optional_context = context.clone();
     optional_context.tracks[1]["material"] = serde_json::json!(false);
@@ -268,6 +264,76 @@ fn comprehensive_report_requires_a_direct_answer_for_each_resolved_material_dime
             .coverage
             .retain(|coverage| coverage.track_id != "request.second");
     }
+    let mut shallow_bounded_proposal = proposal.clone();
+    shallow_bounded_proposal["claims"]
+        .as_array_mut()
+        .expect("claims array")
+        .retain(|claim| {
+            claim["dimension_id"] != "request.second"
+                || claim["analysis_role"] == "evidence"
+        });
+    let shallow_bounded = evaluate_deep_research_typed_report_draft_in_language_at(
+        "research both material dimensions",
+        "2026-07-24",
+        "en",
+        &bounded_catalog,
+        &context,
+        with_narrative(shallow_bounded_proposal, &context),
+    )
+    .expect("evaluate evidence-bearing bounded dimension");
+    let TypedReportDraftAdmission::Rejected(diagnostics) = shallow_bounded else {
+        panic!("multiple useful facts plus a gap must not pass as a developed section");
+    };
+    assert!(diagnostics.has_issue("request.second", "missing_comparison"));
+    assert!(diagnostics.has_issue("request.second", "missing_explanation"));
+    assert!(diagnostics.has_issue("request.second", "missing_implication"));
+    assert!(diagnostics.has_issue(
+        "request.second",
+        "missing_challenge_or_boundary"
+    ));
+    assert!(diagnostics.has_issue(
+        "request.second",
+        "missing_cross_source_synthesis"
+    ));
+    assert!(diagnostics.has_issue(
+        "request.second",
+        "insufficient_partial_substantive_characters"
+    ));
+    let same_origin = source_attribution(
+        &[
+            ("source-1", "shared-attribution-group"),
+            ("source-2", "shared-attribution-group"),
+        ],
+        &[],
+    );
+    let mut same_origin_partial = proposal.clone();
+    same_origin_partial["claims"]
+        .as_array_mut()
+        .expect("claims array")
+        .retain(|claim| {
+            claim["dimension_id"] != "request.second"
+                || claim["analysis_role"] == "evidence"
+        });
+    let same_origin_outcome =
+        evaluate_deep_research_typed_report_draft_with_attribution_in_language_at(
+            "research both material dimensions",
+            "2026-07-24",
+            "en",
+            &bounded_catalog,
+            &same_origin,
+            &context,
+            with_narrative(same_origin_partial, &context),
+        )
+        .expect("evaluate same-origin partial evidence");
+    let TypedReportDraftAdmission::Rejected(same_origin_diagnostics) = same_origin_outcome else {
+        panic!("same-origin partial evidence still needs analysis");
+    };
+    assert!(same_origin_diagnostics.has_issue("request.second", "missing_comparison"));
+    assert!(!same_origin_diagnostics.has_issue(
+        "request.second",
+        "missing_cross_source_synthesis"
+    ));
+
     proposal["claims"][3]["placement"] = serde_json::json!("direct_answer");
     proposal["claims"][3]["analysis_role"] = serde_json::json!("conclusion");
     let report = admit_deep_research_typed_report_proposal_at(

@@ -445,7 +445,24 @@ pub(crate) fn render_report_menu(
     primary_status: &str,
     secondary_status: Option<&str>,
 ) -> String {
-    let labels = report_host_labels(language);
+    render_document_menu(language, primary_status, secondary_status, false)
+}
+
+pub(crate) fn render_evidence_snapshot_menu(
+    language: &str,
+    primary_status: &str,
+    secondary_status: Option<&str>,
+) -> String {
+    render_document_menu(language, primary_status, secondary_status, true)
+}
+
+fn render_document_menu(
+    language: &str,
+    primary_status: &str,
+    secondary_status: Option<&str>,
+    evidence_snapshot: bool,
+) -> String {
+    let labels = report_host_labels(language, evidence_snapshot);
     let secondary = secondary_status
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("<span>{}</span>", escape_html(value)))
@@ -506,36 +523,84 @@ pub(crate) fn document_without_fixed_host_script(document: &str) -> Cow<'_, str>
     }
 }
 
-fn report_host_labels(language: &str) -> ReportHostLabels {
+fn report_host_labels(language: &str, evidence_snapshot: bool) -> ReportHostLabels {
     if crate::language::primary_output_language(language) == "zh" {
         ReportHostLabels {
-            menu: "报告菜单",
-            product: "深度研究",
-            actions: "报告操作",
-            edit: "编辑报告",
+            menu: if evidence_snapshot {
+                "证据菜单"
+            } else {
+                "报告菜单"
+            },
+            product: if evidence_snapshot {
+                "证据快照"
+            } else {
+                "深度研究"
+            },
+            actions: if evidence_snapshot {
+                "快照操作"
+            } else {
+                "报告操作"
+            },
+            edit: if evidence_snapshot {
+                "编辑快照"
+            } else {
+                "编辑报告"
+            },
             done: "完成编辑",
             save: "保存 HTML",
-            print: "打印报告",
+            print: if evidence_snapshot {
+                "打印快照"
+            } else {
+                "打印报告"
+            },
             readonly: "只读",
             editing: "编辑中 · 修改保留在当前页面",
             saved: "HTML 副本已保存",
             error: "保存失败，请重试",
-            hint: "编辑后保存为新的单文件副本",
+            hint: if evidence_snapshot {
+                "编辑后保存为新的单文件证据副本"
+            } else {
+                "编辑后保存为新的单文件副本"
+            },
         }
     } else {
         ReportHostLabels {
-            menu: "Report menu",
-            product: "Deep Research",
-            actions: "Report actions",
-            edit: "Edit report",
+            menu: if evidence_snapshot {
+                "Evidence menu"
+            } else {
+                "Report menu"
+            },
+            product: if evidence_snapshot {
+                "Evidence Snapshot"
+            } else {
+                "Deep Research"
+            },
+            actions: if evidence_snapshot {
+                "Snapshot actions"
+            } else {
+                "Report actions"
+            },
+            edit: if evidence_snapshot {
+                "Edit snapshot"
+            } else {
+                "Edit report"
+            },
             done: "Finish editing",
             save: "Save HTML",
-            print: "Print report",
+            print: if evidence_snapshot {
+                "Print snapshot"
+            } else {
+                "Print report"
+            },
             readonly: "Read only",
             editing: "Editing · changes remain on this page",
             saved: "HTML copy saved",
             error: "Save failed; try again",
-            hint: "Save an updated single-file copy after editing",
+            hint: if evidence_snapshot {
+                "Save an updated single-file evidence copy after editing"
+            } else {
+                "Save an updated single-file copy after editing"
+            },
         }
     }
 }

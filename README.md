@@ -135,11 +135,17 @@ with an explicit locale selection may replace it with
   basis edges and reproducible derivations available in a collapsed
   traceability disclosure
 - **Fixed A3S Report Design**: Render every HTML publication outcome through
-  one A3S Code Web-aligned token system; legacy presentation metadata cannot
+  one A3S report token system; legacy presentation metadata cannot
   change the palette, hero, density, typography, or section composition. The
   shared renderer uses a sticky left action menu, a centered report surface,
   and a sticky right table of contents on desktop; narrow screens stack the
   action menu and table of contents ahead of the report without page overflow
+- **Evidence-Bound Visual Reporting**: Let the model propose only bounded
+  semantic chart state when multiple facts expose directly comparable data.
+  The Host validates exact values, source excerpts, measure, unit, claim kind,
+  dimension, and output language before rendering inline SVG and a
+  claim-linked data table. Reports never depend on a CDN or model-authored
+  script, and remain valid when no chart is supportable
 - **Progressive Publication**: Preserve a source-backed report before attempting
   a typed claim graph and independent editorial review
 - **Explicit Evidence Boundaries**: Publish a no-evidence report when no source
@@ -370,7 +376,7 @@ The engine persists both the number of resolved material dimensions and the
 number that passed this deeper gate. A synthesized report is valid only when
 those counts are equal and every material requirement is resolved. A qualified
 artifact may preserve supported partial work, but its nonzero gap count keeps
-it incomplete at every CLI, TUI, and Web success boundary. The all-bounded
+it incomplete at every CLI and TUI success boundary. The all-bounded
 preview is represented explicitly as zero resolved dimensions, one deeply
 analyzed bounded dimension, exactly one direct answer, and at least one typed
 gap. Restart recovery therefore cannot promote an older report whose aggregate
@@ -417,6 +423,18 @@ and rejects obvious aggregate prose-language mismatches. Source-defined names
 and quotations may remain in their original language. Reader-facing labels and
 evidence-boundary prose arrive inside the typed proposal, are shape-validated,
 and are rendered as inert text.
+
+Visualizations follow the same boundary. The typed proposal can describe one
+of five small semantic relationships (`bar`, `line`, `scatter`, `timeline`, or
+`kpi`) but cannot provide markup, renderer code, transforms, styling, or
+scripts. Each coordinate names an admitted fact claim and an exact substring
+from that claim's cited chunk. Quantitative axes also declare a shared measure
+token and unit token that must occur in every supporting excerpt; the Host does
+not normalize or convert values. Only after those checks does the standalone
+HTML renderer emit an accessible inline SVG, an equivalent data table, and
+links back to the admitted claims. This mirrors Flint's separation between
+AI-authored chart intent and Host-owned data execution while preserving a
+small, offline, single-file artifact.
 
 The planner writes titles, tracks, criteria, and the final report in the pinned
 reader language. Supplemental retrieval queries may use a source's native

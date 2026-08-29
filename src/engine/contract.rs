@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::language::{
     infer_deep_research_output_language, validate_deep_research_output_language,
 };
-use crate::planner::deep_research_loop_contract_for_language;
+use crate::planner::{deep_research_loop_contract_for_language, DEFAULT_DEPTH_FIRST_MAX_TRACKS};
 use crate::report::validate_deep_research_run_id;
 use crate::workflow::retrieval_workflow_source;
 
@@ -103,7 +103,7 @@ pub struct DeepResearchRequestLimits {
 impl Default for DeepResearchRequestLimits {
     fn default() -> Self {
         Self {
-            max_tracks: MAX_DEEP_RESEARCH_TRACKS,
+            max_tracks: DEFAULT_DEPTH_FIRST_MAX_TRACKS,
             local_max_steps: MAX_LOCAL_MAX_STEPS,
             workflow_timeout_ms: DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS,
             max_tool_calls: MAX_TOOL_CALLS,
@@ -330,7 +330,7 @@ mod tests {
     fn typed_request_infers_and_pins_the_users_output_language() {
         let inferred = DeepResearchRequest::new(
             "run-zh",
-            "比较 A3S Code TUI 与 Web 的深度研究实现",
+            "比较 A3S Code TUI 与无头执行的深度研究实现",
             EvidenceScope::WebAndWorkspace,
         )
         .with_current_date("2026-07-25");
@@ -414,6 +414,8 @@ mod tests {
             DEFAULT_PLANNED_RETRIEVAL_STAGE_TIMEOUT_MS
         );
         assert_eq!(local.workflow_timeout_ms, DEFAULT_LOCAL_WORKFLOW_TIMEOUT_MS);
+        assert_eq!(web.max_tracks, DEFAULT_DEPTH_FIRST_MAX_TRACKS);
+        assert_eq!(local.max_tracks, DEFAULT_DEPTH_FIRST_MAX_TRACKS);
 
         let lower_bounded = local.with_bounded_execution_budget(0, 0, 0);
         assert_eq!(lower_bounded.local_max_steps, MIN_LOCAL_MAX_STEPS);

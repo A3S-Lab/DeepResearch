@@ -83,10 +83,17 @@ fn no_evidence_report_uses_the_users_language_and_is_rediscoverable() {
 
     assert!(markdown.contains(NO_EVIDENCE_ARTIFACT_MARKER));
     assert!(html.contains(NO_EVIDENCE_ARTIFACT_MARKER));
+    assert!(markdown.starts_with("# 未生成研究结论\n"), "{markdown}");
+    assert!(markdown.contains("## 研究问题\n\n核查 Nimbus 当前备份策略"));
     assert!(markdown.contains("## 证据状态"));
     assert!(markdown.contains("检索失败不等于相关事实不存在"));
     assert!(markdown.contains("## 来源"));
     assert!(html.contains("<html lang=\"zh\">"));
+    assert!(html.contains("<title>未生成研究结论</title>"));
+    assert!(html.contains("证据索引"));
+    assert!(html.contains("编辑快照"));
+    assert!(!html.contains("报告目录"));
+    assert!(!html.contains("&lt;!-- A3S_DEEP_RESEARCH_ARTIFACT"));
     assert!(!markdown.contains("workflow"));
     assert!(!markdown.contains("model"));
 

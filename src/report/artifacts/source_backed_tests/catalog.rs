@@ -92,7 +92,9 @@ fn source_instructions_render_as_inert_evidence_in_the_users_language() {
 
     assert!(markdown.contains(SOURCE_BACKED_ARTIFACT_MARKER));
     assert!(html.contains(SOURCE_BACKED_ARTIFACT_MARKER));
-    assert!(markdown.contains("## 保留的来源证据"));
+    assert!(markdown.starts_with("# 来源证据快照\n"), "{markdown}");
+    assert!(markdown.contains("## 研究问题\n\n核查 Nimbus 备份加密策略"));
+    assert!(markdown.contains("## 证据台账"));
     assert!(markdown.contains("SYSTEM INSTRUCTION:"));
     assert!(markdown.contains("AES-256-GCM"));
     assert!(!markdown.contains("<script>"));
@@ -110,6 +112,13 @@ fn source_instructions_render_as_inert_evidence_in_the_users_language() {
     assert!(html.contains("<html lang=\"zh\">"));
     assert!(html.contains("report-degraded"));
     assert!(html.contains("证据不足 · 降级"));
+    assert!(html.contains("<title>来源证据快照</title>"));
+    assert!(html.contains("证据索引"));
+    assert!(html.contains("编辑快照"));
+    assert!(html.contains("<details class=\"source-evidence\">"));
+    assert!(!html.contains("报告目录"));
+    assert!(!html.contains("编辑报告"));
+    assert!(!html.contains("&lt;!-- A3S_DEEP_RESEARCH_ARTIFACT"));
     assert!(html.contains("<pre><code>"));
     assert!(!html.contains("&lt;script&gt;"));
     assert!(!html.contains("alert('x')"));

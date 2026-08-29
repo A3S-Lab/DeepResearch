@@ -313,7 +313,8 @@ fn deep_research_typed_report_proposal_schema(
                     }
                 },
                 "required": ["sections"]
-            }
+            },
+            "visualizations": typed_visualizations_schema(&identifier, &dimension_ids)
         },
         "required": [
             "report_language",
@@ -321,7 +322,8 @@ fn deep_research_typed_report_proposal_schema(
             "claims",
             "relations",
             "gaps",
-            "narrative"
+            "narrative",
+            "visualizations"
         ]
     }))
 }

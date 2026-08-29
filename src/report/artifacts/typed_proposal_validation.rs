@@ -209,7 +209,8 @@ fn validate_typed_wire_report(wire: &TypedWireReportProposal) -> Result<(), Stri
             ));
         }
     }
-    validate_typed_narrative_shape(&wire.narrative)
+    validate_typed_narrative_shape(&wire.narrative)?;
+    validate_typed_visualization_shapes(&wire.visualizations)
 }
 
 fn coalesce_typed_claim_evidence_refs(claims: &mut [serde_json::Value]) {

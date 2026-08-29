@@ -4,10 +4,14 @@ fn deep_research_source_backed_markdown_in_language(
     output_language: &str,
 ) -> String {
     let labels = source_backed_labels(output_language);
-    let title = markdown_plain_text(&query.chars().take(180).collect::<String>());
+    let question = markdown_plain_text(&query.chars().take(1_200).collect::<String>());
     let mut markdown = format!(
-        "# {title}\n\n<!-- {SOURCE_BACKED_ARTIFACT_MARKER} -->\n\n> {}\n\n## {}\n\n{}\n",
-        labels.status, labels.evidence_heading, labels.evidence_intro,
+        "# {title}\n\n<!-- {SOURCE_BACKED_ARTIFACT_MARKER} -->\n\n> {status}\n\n## {question_heading}\n\n{question}\n\n## {evidence_heading}\n\n{evidence_intro}\n",
+        title = labels.title,
+        status = labels.status,
+        question_heading = labels.question_heading,
+        evidence_heading = labels.evidence_heading,
+        evidence_intro = labels.evidence_intro,
     );
     for (index, source) in catalog.sources.iter().enumerate() {
         let number = index + 1;
@@ -55,7 +59,9 @@ fn deep_research_source_backed_markdown_in_language(
 }
 
 struct SourceBackedLabels {
+    title: &'static str,
     status: &'static str,
+    question_heading: &'static str,
     evidence_heading: &'static str,
     evidence_intro: &'static str,
     limitations_heading: &'static str,
@@ -70,8 +76,10 @@ struct SourceBackedLabels {
 fn source_backed_labels(output_language: &str) -> SourceBackedLabels {
     if crate::language::primary_output_language(output_language) == "zh" {
         SourceBackedLabels {
+            title: "来源证据快照",
             status: "这是可核验的来源证据视图。它保留已获取材料，但不把摘录冒充为已经完成的综合分析。",
-            evidence_heading: "保留的来源证据",
+            question_heading: "研究问题",
+            evidence_heading: "证据台账",
             evidence_intro: "以下摘录按来源分组，仅作为待核验的原始证据展示；可通过对应链接直接检查。",
             limitations_heading: "边界与局限",
             limitations: "本结果保留了相关来源摘录和链接，但不声称分析已经完成，也不声称这些摘录覆盖了问题的全部方面。",
@@ -85,8 +93,10 @@ fn source_backed_labels(output_language: &str) -> SourceBackedLabels {
         }
     } else {
         SourceBackedLabels {
+            title: "Source Evidence Snapshot",
             status: "This is a verifiable source-evidence view. It preserves fetched material without presenting excerpts as a completed synthesis.",
-            evidence_heading: "Preserved Source Evidence",
+            question_heading: "Research Question",
+            evidence_heading: "Evidence Ledger",
             evidence_intro: "The excerpts below are grouped by source and displayed only as untrusted data for direct verification through the corresponding links.",
             limitations_heading: "Limitations",
             limitations: "This result preserves relevant source excerpts and links, but it does not claim that analysis is complete or that the excerpts cover every aspect of the question.",

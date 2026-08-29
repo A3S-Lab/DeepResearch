@@ -9,6 +9,13 @@ The project follows Semantic Versioning while the public API remains in the
 
 ### Added
 
+- Add optional evidence-bound semantic charts to typed reports. Models choose
+  only a bounded bar, line, scatter, timeline, or KPI relationship; the Host
+  verifies every coordinate against an admitted fact and its cited chunk,
+  enforces one common measure and unit per quantitative axis, then renders an
+  accessible inline SVG plus a claim-linked data table into the standalone
+  HTML. Invalid, inferred, converted, or language-mismatched charts are omitted
+  without weakening an otherwise admissible report.
 - Add a global, byte-bounded source-attribution review over each changed
   selected portfolio when declared independence otherwise appears complete,
   then preserve or refresh that review for the final portfolio. Same-origin
@@ -80,7 +87,7 @@ The project follows Semantic Versioning while the public API remains in the
 - Reject repeated claim openings and near-duplicate claim prose so length and
   claim-count gates cannot be satisfied with editorial padding.
 - Render typed, source-backed, qualified, and degraded HTML through one fixed
-  A3S Code Web-aligned visual system. Legacy presentation metadata remains
+  A3S report visual system. Legacy presentation metadata remains
   readable for compatibility but no longer changes report styling or layout.
 - Allow source-native supplemental retrieval queries when they improve recall
   while keeping planner prose and final publication pinned to the user's output

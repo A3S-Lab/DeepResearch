@@ -251,10 +251,12 @@ fn materialize_deep_research_no_evidence_report_at(
     rel_html: &str,
     output_language: &str,
 ) -> Result<ResearchReportArtifacts, String> {
-    let title = markdown_plain_text(&query.chars().take(180).collect::<String>());
+    let question = markdown_plain_text(&query.chars().take(1_200).collect::<String>());
     let labels = no_evidence_labels(output_language);
     let markdown = format!(
-        "# {title}\n\n<!-- {NO_EVIDENCE_ARTIFACT_MARKER} -->\n\n## {status_heading}\n\n{status}\n\n## {limitations_heading}\n\n{limitations}\n\n## {sources_heading}\n\n{sources}\n",
+        "# {title}\n\n<!-- {NO_EVIDENCE_ARTIFACT_MARKER} -->\n\n## {question_heading}\n\n{question}\n\n## {status_heading}\n\n{status}\n\n## {limitations_heading}\n\n{limitations}\n\n## {sources_heading}\n\n{sources}\n",
+        title = labels.title,
+        question_heading = labels.question_heading,
         status_heading = labels.status_heading,
         status = labels.status,
         limitations_heading = labels.limitations_heading,
@@ -280,6 +282,8 @@ fn materialize_deep_research_no_evidence_report_at(
 }
 
 struct NoEvidenceLabels {
+    title: &'static str,
+    question_heading: &'static str,
     status_heading: &'static str,
     status: &'static str,
     limitations_heading: &'static str,
@@ -291,6 +295,8 @@ struct NoEvidenceLabels {
 fn no_evidence_labels(output_language: &str) -> NoEvidenceLabels {
     if crate::language::primary_output_language(output_language) == "zh" {
         NoEvidenceLabels {
+            title: "未生成研究结论",
+            question_heading: "研究问题",
             status_heading: "证据状态",
             status: "本次检索未获得可安全发布的来源文本，因此不生成领域结论。",
             limitations_heading: "边界与局限",
@@ -300,6 +306,8 @@ fn no_evidence_labels(output_language: &str) -> NoEvidenceLabels {
         }
     } else {
         NoEvidenceLabels {
+            title: "No Research Conclusion Generated",
+            question_heading: "Research Question",
             status_heading: "Evidence Status",
             status: "This retrieval obtained no source text that can be published safely, so no domain conclusion is generated.",
             limitations_heading: "Limitations",

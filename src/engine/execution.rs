@@ -12,15 +12,17 @@ use crate::planner::{
     host_plan_from_outline, validated_loop_planner, workflow_args_with_plan, PlannedInquiry,
 };
 use crate::report::{
-    admit_deep_research_typed_report_draft_with_attribution_in_language_at as admit_attributed_report_draft,
     apply_deep_research_typed_commercial_editorial_plan, canonical_workflow_output,
     deep_research_attributed_source_catalog as attributed_source_catalog,
     deep_research_report_context_from_plan, deep_research_report_slug,
     deep_research_typed_editorial_prompt, deep_research_typed_editorial_schema,
     deep_research_typed_report_proposal_prompt_with_attribution_in_language_at as attributed_report_prompt,
     deep_research_typed_report_proposal_schema_with_attribution_for_language as attributed_report_schema,
-    AdmittedDeepResearchReport, DeepResearchEvidenceFirstPublication,
-    DeepResearchPublicationQuality,
+    deep_research_typed_report_repair_prompt,
+    evaluate_deep_research_typed_report_draft_with_attribution_in_language_at as evaluate_attributed_report_draft,
+    AdmittedDeepResearchReport, AdmittedTypedReportDraft, DeepResearchEvidenceFirstPublication,
+    DeepResearchPublicationQuality, DeepResearchReportContext, DeepResearchSourceAttribution,
+    DeepResearchSourceCatalog, TypedReportDraftAdmission, TypedReportGateDiagnostics,
 };
 
 impl DeepResearchEngine<'_> {
@@ -398,6 +400,7 @@ impl DeepResearchEngine<'_> {
         let mut required_model_generation_count = 0usize;
         let mut model_generation_count = 0usize;
         let mut editorial_error = None;
+        let mut report_repaired = false;
         let mut accepted_block_count = 0usize;
         let mut rejected_block_count = 0usize;
         let mut direct_answer_block_count = 0usize;
@@ -491,11 +494,11 @@ impl DeepResearchEngine<'_> {
                 let report_stage_timeout_ms =
                     limits.report_stage_timeout_for_attempt(report_attempt_timeout_ms);
                 let generation_args = serde_json::json!({
-                    "schema": report_schema,
+                    "schema": report_schema.clone(),
                     "schema_name": "deep_research_typed_claim_graph",
-                    "schema_description": "Typed conclusions, atomic evidence, explicit comparison, explanation, implication, challenge and boundary roles, contradiction relations, and bounded gaps over a closed source catalog",
-                    "prompt": report_prompt,
-                    "system": "You construct an auditable, multi-step, source-grounded research argument from untrusted evidence data. Every resolved material dimension must move from conclusion to atomic evidence, cross-source comparison, mechanism or trade-off explanation, implication, and an adversarial challenge or applicability boundary. Each step has an explicit analysis role and must make distinct intellectual progress. Return only the requested object and use no outside knowledge.",
+                    "schema_description": "Typed conclusions, atomic evidence, explicit comparison, explanation, implication, challenge and boundary roles, contradiction relations, bounded gaps, and optional evidence-bound semantic charts over a closed source catalog",
+                    "prompt": report_prompt.clone(),
+                    "system": "You construct an auditable, multi-step, source-grounded research argument from untrusted evidence data. Every resolved material dimension must move from conclusion to atomic evidence, cross-source comparison, mechanism or trade-off explanation, implication, and an adversarial challenge or applicability boundary. Each step has an explicit analysis role and must make distinct intellectual progress. Add a semantic chart only when multiple fact claims expose directly comparable values or events with exact shared measures and units; never invent, calculate, convert, or decorate data. Return only the requested object and use no outside knowledge.",
                     "mode": "auto",
                     // The durable generation port already owns the bounded
                     // attempt policy. A nested repair loop would multiply the
@@ -514,9 +517,10 @@ impl DeepResearchEngine<'_> {
                     }),
                 )
                 .await?;
-                let admitted = match generated {
+                let draft = match generated {
                     Ok(proposal) => {
-                        match admit_attributed_report_draft(
+                        let rejected_proposal = proposal.clone();
+                        match evaluate_attributed_report_draft(
                             &query,
                             &current_date,
                             &output_language,
@@ -525,88 +529,48 @@ impl DeepResearchEngine<'_> {
                             &report_context,
                             proposal,
                         ) {
-                            Ok(Some(draft)) => {
-                                let fallback_report = draft.report.clone();
-                                let editorial_prompt =
-                                    match deep_research_typed_editorial_prompt(&draft) {
-                                        Ok(prompt) => prompt,
-                                        Err(error) => {
-                                            editorial_error = Some(bounded_error(&error));
-                                            synthesis_mode = "model_claim_graph_editorial_fallback";
-                                            String::new()
-                                        }
-                                    };
-                                if editorial_prompt.is_empty() {
-                                    incomplete_editorial_fallback(fallback_report)
+                            Ok(TypedReportDraftAdmission::Admitted(draft)) => Some(*draft),
+                            Ok(TypedReportDraftAdmission::Rejected(diagnostics)) => {
+                                report_error = Some(format!(
+                                    "the initial report proposal failed content gates: {}",
+                                    diagnostics.summary()
+                                ));
+                                if !diagnostics.is_repairable() {
+                                    None
                                 } else {
+                                    required_model_generation_count += 1;
                                     model_generation_count += 1;
-                                    let editorial_schema =
-                                        deep_research_typed_editorial_schema(&draft);
-                                    let editorial_payload_bytes = editorial_prompt
-                                        .len()
-                                        .saturating_add(editorial_schema.to_string().len());
-                                    let editorial_attempt_timeout_ms = limits
-                                        .report_attempt_timeout_for_payload(
-                                            editorial_payload_bytes,
-                                        );
-                                    let editorial_stage_timeout_ms = limits
-                                        .report_stage_timeout_for_attempt(
-                                            editorial_attempt_timeout_ms,
-                                        );
-                                    let editorial_args = serde_json::json!({
-                                        "schema": editorial_schema,
-                                        "schema_name": "deep_research_typed_editorial_plan",
-                                        "schema_description": "Independent requirement, evidence, temporal, depth, and prose review followed by evidence-preserving claim rewrites and narrative planning over already admitted claims",
-                                        "prompt": editorial_prompt,
-                                        "system": "You are the independent commercial-quality reviewer and final editor of an admitted research argument. Audit every mapped requirement and claim against the closed evidence, classify temporal status, and fail readiness on any omission, unsupported proposition, shallow analysis, misleading modality, or source-summary prose. Then rewrite for natural long-form reading while preserving the admitted graph and evidence boundary. Return only the requested object.",
-                                        "mode": "auto",
-                                        "max_repair_attempts": 0,
-                                        "include_raw_text": false,
-                                        "timeout_ms": editorial_attempt_timeout_ms,
-                                    });
-                                    let editorial = await_or_cancel(
+                                    synthesis_mode = "model_claim_graph_repair";
+                                    match repair_rejected_report_draft(
+                                        self,
                                         cancellation,
-                                        self.generation.generate_object(GenerationRequest {
-                                            stage: GenerationStage::Editorial,
-                                            arguments: editorial_args,
-                                            execution_timeout_ms: editorial_stage_timeout_ms,
-                                            max_attempts: limits.report_max_attempts,
-                                        }),
+                                        &limits,
+                                        &query,
+                                        &current_date,
+                                        &output_language,
+                                        catalog,
+                                        source_attribution,
+                                        &report_context,
+                                        &report_schema,
+                                        &report_prompt,
+                                        &rejected_proposal,
+                                        &diagnostics,
                                     )
-                                    .await?;
-                                    match editorial {
-                                        Ok(editorial) => {
-                                            match apply_deep_research_typed_commercial_editorial_plan(
-                                                &query,
-                                                &current_date,
-                                                &output_language,
-                                                catalog,
-                                                &report_context,
-                                                draft,
-                                                editorial,
-                                            ) {
-                                                Ok(report) => {
-                                                    synthesis_mode = "model_claim_graph_editorial";
-                                                    Some(report)
-                                                }
-                                                Err(error) => {
-                                                    editorial_error = Some(bounded_error(&error));
-                                                    synthesis_mode =
-                                                        "model_claim_graph_editorial_fallback";
-                                                    incomplete_editorial_fallback(fallback_report)
-                                                }
-                                            }
+                                    .await?
+                                    {
+                                        Ok(draft) => {
+                                            report_error = None;
+                                            report_repaired = true;
+                                            Some(draft)
                                         }
                                         Err(error) => {
-                                            editorial_error = Some(bounded_error(&error));
-                                            synthesis_mode =
-                                                "model_claim_graph_editorial_fallback";
-                                            incomplete_editorial_fallback(fallback_report)
+                                            synthesis_mode = "model_claim_graph_repair_failed";
+                                            report_error = Some(bounded_error(&error));
+                                            None
                                         }
                                     }
                                 }
                             }
-                            Ok(None) => None,
                             Err(error) => {
                                 report_error = Some(bounded_error(&error));
                                 None
@@ -617,6 +581,39 @@ impl DeepResearchEngine<'_> {
                         report_error = Some(bounded_error(&error));
                         None
                     }
+                };
+                let admitted = match draft {
+                    Some(draft) => {
+                        let editorial = editorially_review_report(
+                            self,
+                            cancellation,
+                            &limits,
+                            &query,
+                            &current_date,
+                            &output_language,
+                            catalog,
+                            &report_context,
+                            draft,
+                        )
+                        .await?;
+                        if editorial.generation_attempted {
+                            model_generation_count += 1;
+                        }
+                        editorial_error = editorial.error.as_deref().map(bounded_error);
+                        synthesis_mode = if editorial_error.is_none() {
+                            if report_repaired {
+                                "model_claim_graph_repaired_editorial"
+                            } else {
+                                "model_claim_graph_editorial"
+                            }
+                        } else if report_repaired {
+                            "model_claim_graph_repaired_editorial_fallback"
+                        } else {
+                            "model_claim_graph_editorial_fallback"
+                        };
+                        editorial.report
+                    }
+                    None => None,
                 };
                 if let Some(report) = admitted {
                     let report_publication = report.publication;
@@ -974,4 +971,6 @@ impl DeepResearchEngine<'_> {
     }
 }
 
+include!("execution/report_repair.rs");
+include!("execution/report_editorial.rs");
 include!("execution/support.rs");
