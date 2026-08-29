@@ -57,7 +57,7 @@ The project follows Semantic Versioning while the public API remains in the
 - Reject repeated claim openings and near-duplicate claim prose so length and
   claim-count gates cannot be satisfied with editorial padding.
 - Render typed, source-backed, qualified, and degraded HTML through one fixed
-  A3S Code Web-aligned visual system. Legacy presentation metadata remains
+  A3S report visual system. Legacy presentation metadata remains
   readable for compatibility but no longer changes report styling or layout.
 - Allow source-native supplemental retrieval queries when they improve recall
   while keeping planner prose and final publication pinned to the user's output

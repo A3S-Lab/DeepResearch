@@ -123,7 +123,7 @@ with an explicit locale selection may replace it with
   basis edges and reproducible derivations available in a collapsed
   traceability disclosure
 - **Fixed A3S Report Design**: Render every HTML publication outcome through
-  one A3S Code Web-aligned token system; legacy presentation metadata cannot
+  one A3S report token system; legacy presentation metadata cannot
   change the palette, hero, density, typography, or section composition. The
   shared renderer uses a sticky left action menu, a centered report surface,
   and a sticky right table of contents on desktop; narrow screens stack the
@@ -317,7 +317,7 @@ The engine persists both the number of resolved material dimensions and the
 number that passed this deeper gate. A synthesized report is valid only when
 those counts are equal and every material requirement is resolved. A qualified
 artifact may preserve supported partial work, but its nonzero gap count keeps
-it incomplete at every CLI, TUI, and Web success boundary. The all-bounded
+it incomplete at every CLI and TUI success boundary. The all-bounded
 preview is represented explicitly as zero resolved dimensions, one deeply
 analyzed bounded dimension, exactly one direct answer, and at least one typed
 gap. Restart recovery therefore cannot promote an older report whose aggregate

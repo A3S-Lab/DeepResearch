@@ -330,7 +330,7 @@ mod tests {
     fn typed_request_infers_and_pins_the_users_output_language() {
         let inferred = DeepResearchRequest::new(
             "run-zh",
-            "比较 A3S Code TUI 与 Web 的深度研究实现",
+            "比较 A3S Code TUI 与无头执行的深度研究实现",
             EvidenceScope::WebAndWorkspace,
         )
         .with_current_date("2026-07-25");
