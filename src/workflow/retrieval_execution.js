@@ -832,7 +832,7 @@
         : [],
       excluded_candidates: excludedCandidates,
       packet: round === 1 ? packet : null,
-      semantic_selection: round === 1 ? semanticSelection : null,
+      semantic_selection: round === 1 ? resolvedSelection.selector : null,
       coverage_bindings: coverageBindings,
       coverage_gaps: coverageGaps,
       outputs,
