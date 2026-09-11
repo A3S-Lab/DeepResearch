@@ -7,6 +7,17 @@ The project follows Semantic Versioning while the public API remains in the
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept Core staged `batch` section headers (`--- [N / step S: label] ---`)
+  while still parsing the legacy `--- [N: label] ---` form, so bootstrap and
+  planned retrieval no longer fail closed and re-issue duplicate `web_search`
+  calls under `direct_searches=1`.
+- When model-backed `select_evidence_chunks` fails or returns no usable chunk
+  IDs, promote a bounded closed-catalog deterministic excerpt set with typed
+  relevance edges (and empty coverage). Acquired substantive text can still
+  become claim-eligible instead of collapsing the whole run to `no_evidence`.
+
 ## [0.1.4] - 2026-08-06
 
 ### Added

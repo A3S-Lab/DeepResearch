@@ -851,11 +851,16 @@
       sourceReduction.error || "",
       selectorFailure || "",
     ]);
+    const resolvedSelection = resolveClosedEvidenceSelection(
+      supplementalPacket,
+      supplementalSemanticSelection,
+      errors
+    );
     return {
       schedule: null,
       selection: materializeEvidence(
         supplementalPacket,
-        supplementalSemanticSelection,
+        resolvedSelection.selector,
         errors,
         {
           retrieval_pass: round + 1,
@@ -881,6 +886,7 @@
             sourceReduction.failed_source_reduction_count || 0,
           semantic_selection_materialized_count:
             sourceReduction.candidate_count,
+          closed_catalog_deterministic_fallback: resolvedSelection.used_fallback,
           web: object(retrieval.metadata),
         }
       ),

@@ -60,4 +60,21 @@ mod tests {
         assert!(!source.contains("more fetched content available"));
         assert!(!source.contains("more lines available"));
     }
+
+    #[test]
+    fn retrieval_workflow_accepts_core_staged_batch_headers() {
+        let source = retrieval_workflow_source();
+        assert!(
+            source.contains("/ step ${step}: ${label}"),
+            "workflow must parse Core staged batch headers"
+        );
+        assert!(
+            source.contains("closedCatalogDeterministicSelection"),
+            "workflow must retain closed-catalog selection fallback"
+        );
+        assert!(
+            source.contains("resolveClosedEvidenceSelection"),
+            "workflow must resolve semantic selection through the closed fallback"
+        );
+    }
 }

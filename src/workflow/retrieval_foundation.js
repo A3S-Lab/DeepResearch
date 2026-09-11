@@ -317,7 +317,13 @@ async function run(ctx, inputs) {
       const label = correlationId === null
         ? tool
         : `${tool} · ${correlationId}`;
-      const header = `--- [${position + 1}: ${label}] ---\n`;
+      // Core staged batch headers include the step index when present:
+      // `--- [N / step S: label] ---`. Keep the legacy `--- [N: label] ---`
+      // form as a fallback so older fixtures and Host rewrites still parse.
+      const step = Number(metadata.step);
+      const header = Number.isInteger(step) && step > 0
+        ? `--- [${position + 1} / step ${step}: ${label}] ---\n`
+        : `--- [${position + 1}: ${label}] ---\n`;
       if (text.slice(cursor, cursor + header.length) !== header) {
         break;
       }

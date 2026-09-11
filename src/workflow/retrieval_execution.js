@@ -664,9 +664,14 @@
         source_relevance: sourceReduction.source_relevance,
       }
     : structuredOutput(outputs[STEP_SELECT]);
-  const primarySelection = materializeEvidence(
+  const resolvedSelection = resolveClosedEvidenceSelection(
     packet,
     semanticSelection,
+    retrievalErrors
+  );
+  const primarySelection = materializeEvidence(
+    packet,
+    resolvedSelection.selector,
     retrievalErrors,
     {
       catalog_source_count: admission.source_count,
@@ -683,6 +688,7 @@
       semantic_selection_failed_source_reduction_count:
         sourceReduction.failed_source_reduction_count || 0,
       semantic_selection_materialized_count: sourceReduction.candidate_count,
+      closed_catalog_deterministic_fallback: resolvedSelection.used_fallback,
       bootstrap_source_count: hasBootstrapPacket
         ? bootstrapPacket.sources.length
         : 0,

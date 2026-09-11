@@ -1,3 +1,127 @@
+  // When model-backed chunk selection times out or returns an unusable
+  // object, promote a bounded closed-catalog excerpt set so acquired text can
+  // still become claim-eligible. Coverage stays empty: this path never claims
+  // full criterion closure. Relevance edges use focus-token overlap against
+  // retained excerpt text, falling back to the first focus only when no token
+  // matches — still closed IDs, never open-world routing.
+  const closedCatalogDeterministicSelection = (packet) => {
+    if (
+      !packet ||
+      !Array.isArray(packet.sources) ||
+      packet.sources.length === 0 ||
+      !Array.isArray(packet.focuses) ||
+      packet.focuses.length === 0
+    ) {
+      return null;
+    }
+    const defaultObligation = packet.focuses[0] &&
+      typeof packet.focuses[0].obligation_id === "string"
+      ? packet.focuses[0].obligation_id
+      : "";
+    if (!defaultObligation) {
+      return null;
+    }
+    const tokenize = (text) => String(text || "")
+      .toLowerCase()
+      .split(/[^a-z0-9\u4e00-\u9fff]+/)
+      .filter((token) => token.length > 2);
+    const chunkIds = [];
+    const sourceRelevance = [];
+    for (const source of packet.sources) {
+      if (!source || !Array.isArray(source.chunks) || source.chunks.length === 0) {
+        continue;
+      }
+      const sourceId = typeof source.source_id === "string"
+        ? source.source_id
+        : "";
+      if (!sourceId) {
+        continue;
+      }
+      let retainedChars = 0;
+      let retainedCount = 0;
+      const retainedTexts = [];
+      for (const chunk of source.chunks) {
+        if (retainedCount >= MAX_EXCERPTS_PER_SOURCE) {
+          break;
+        }
+        const chunkId = typeof chunk.chunk_id === "string"
+          ? chunk.chunk_id
+          : "";
+        const quote = String(chunk.text || "");
+        const quoteChars = Array.from(quote).length;
+        if (
+          !chunkId ||
+          !quote ||
+          quoteChars > MAX_CHUNK_CHARS ||
+          retainedChars + quoteChars > MAX_EXCERPT_CHARS_PER_SOURCE
+        ) {
+          continue;
+        }
+        chunkIds.push(chunkId);
+        retainedTexts.push(quote);
+        retainedChars += quoteChars;
+        retainedCount += 1;
+      }
+      if (retainedCount === 0) {
+        continue;
+      }
+      const blob = retainedTexts.join(" ").toLowerCase();
+      let bestObligation = defaultObligation;
+      let bestScore = 0;
+      for (const focus of packet.focuses) {
+        const obligationId = focus &&
+          typeof focus.obligation_id === "string"
+          ? focus.obligation_id
+          : "";
+        if (!obligationId) {
+          continue;
+        }
+        let score = 0;
+        for (const token of tokenize(focus.focus)) {
+          if (blob.includes(token)) {
+            score += 1;
+          }
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestObligation = obligationId;
+        }
+      }
+      sourceRelevance.push({
+        source_id: sourceId,
+        obligation_id: bestObligation,
+      });
+    }
+    if (chunkIds.length === 0 || sourceRelevance.length === 0) {
+      return null;
+    }
+    return {
+      chunk_ids: chunkIds,
+      source_coverage: [],
+      source_relevance: sourceRelevance,
+    };
+  };
+
+  const resolveClosedEvidenceSelection = (packet, semanticSelection, errors) => {
+    if (
+      semanticSelection &&
+      Array.isArray(semanticSelection.chunk_ids) &&
+      semanticSelection.chunk_ids.length > 0
+    ) {
+      return { selector: semanticSelection, used_fallback: false };
+    }
+    const fallback = closedCatalogDeterministicSelection(packet);
+    if (!fallback) {
+      return { selector: semanticSelection, used_fallback: false };
+    }
+    if (Array.isArray(errors)) {
+      errors.push(
+        "Semantic chunk selection did not complete; closed-catalog deterministic excerpts were promoted for claim-eligible publication."
+      );
+    }
+    return { selector: fallback, used_fallback: true };
+  };
+
   const materializeEvidence = (packet, selector, errors, metadata) => {
     const boundedErrors = uniqueStrings(errors).slice(0, 16);
     if (!packet || !selector || !Array.isArray(selector.chunk_ids)) {
