@@ -628,7 +628,14 @@
     !usesSelectorShards &&
     sourceReduction.packet &&
     !outputs[STEP_SELECT] &&
-    !failures[STEP_SELECT]
+    !failures[STEP_SELECT] &&
+    // Tiny closed catalogs cannot gain from a multi-minute selector call:
+    // every retained chunk already fits the excerpt budget, so promote them
+    // through the closed deterministic path instead of waiting for timeout.
+    !(
+      admission.chunk_count > 0 &&
+      admission.chunk_count <= MAX_EXCERPTS_PER_SOURCE
+    )
   ) {
     return {
       type: "schedule_step",
@@ -655,20 +662,27 @@
     sourceReduction.error || "",
     selectorFailure || "",
   ]);
-  const semanticSelection = usesSelectorShards && sourceReduction.packet
-      ? {
-        chunk_ids: sourceReduction.packet.sources.flatMap((source) =>
-          source.chunks.map((chunk) => chunk.chunk_id)
-        ),
-        source_coverage: sourceReduction.source_coverage,
-        source_relevance: sourceReduction.source_relevance,
-      }
-    : structuredOutput(outputs[STEP_SELECT]);
-  const resolvedSelection = resolveClosedEvidenceSelection(
-    packet,
-    semanticSelection,
-    retrievalErrors
-  );
+  const preferClosedDeterministic = !usesSelectorShards &&
+    admission.chunk_count > 0 &&
+    admission.chunk_count <= MAX_EXCERPTS_PER_SOURCE;
+  const resolvedSelection = preferClosedDeterministic
+    ? {
+      selector: closedCatalogDeterministicSelection(packet),
+      used_fallback: true,
+    }
+    : resolveClosedEvidenceSelection(
+      packet,
+      usesSelectorShards && sourceReduction.packet
+        ? {
+          chunk_ids: sourceReduction.packet.sources.flatMap((source) =>
+            source.chunks.map((chunk) => chunk.chunk_id)
+          ),
+          source_coverage: sourceReduction.source_coverage,
+          source_relevance: sourceReduction.source_relevance,
+        }
+        : structuredOutput(outputs[STEP_SELECT]),
+      retrievalErrors
+    );
   const primarySelection = materializeEvidence(
     packet,
     resolvedSelection.selector,

@@ -17,6 +17,9 @@ The project follows Semantic Versioning while the public API remains in the
   IDs, promote a bounded closed-catalog deterministic excerpt set with typed
   relevance edges (and empty coverage). Acquired substantive text can still
   become claim-eligible instead of collapsing the whole run to `no_evidence`.
+- Skip the multi-minute model selector for tiny closed catalogs
+  (`chunk_count <= MAX_EXCERPTS_PER_SOURCE`) and promote those excerpts
+  through the same closed deterministic path immediately.
 
 ## [0.1.4] - 2026-08-06
 
