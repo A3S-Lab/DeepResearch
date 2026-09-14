@@ -177,10 +177,20 @@ const perCriterionRoleRetrieval = {
         title: "Primary record",
         url_or_path: "https://role-primary.example.test/record",
         reliability: "Fetched source text.",
-        chunks: [{
-          chunk_id: "role-source-primary:chunk:1",
-          text: "The original record establishes both requested criteria.",
-        }],
+        chunks: [
+          {
+            chunk_id: "role-source-primary:chunk:1",
+            text: "The original record establishes both requested criteria.",
+          },
+          {
+            chunk_id: "role-source-primary:chunk:2",
+            text: "Padding chunk two for closed-catalog selector threshold.",
+          },
+          {
+            chunk_id: "role-source-primary:chunk:3",
+            text: "Padding chunk three for closed-catalog selector threshold.",
+          },
+        ],
       },
       {
         source_id: "role-source-independent-one",

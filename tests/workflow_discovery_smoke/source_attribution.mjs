@@ -170,11 +170,25 @@ const adaptiveInitialRetrieval = {
       title: "Original accountable record",
       url_or_path: "https://adaptive-original.example.test/record",
       reliability: "Fetched source text.",
-      chunks: [{
-        chunk_id: "original-record:chunk:1",
-        text:
-          "The accountable issuing authority's original record establishes the material criterion.",
-      }],
+      chunks: [
+        {
+          chunk_id: "original-record:chunk:1",
+          text:
+            "The accountable issuing authority's original record establishes the material criterion.",
+        },
+        {
+          chunk_id: "original-record:chunk:2",
+          text: "Padding chunk two for closed-catalog selector threshold.",
+        },
+        {
+          chunk_id: "original-record:chunk:3",
+          text: "Padding chunk three for closed-catalog selector threshold.",
+        },
+        {
+          chunk_id: "original-record:chunk:4",
+          text: "Padding chunk four for closed-catalog selector threshold.",
+        },
+      ],
     }, {
       source_id: "derivative-record",
       title: "Republication of the original accountable record",

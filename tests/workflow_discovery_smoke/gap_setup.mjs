@@ -243,6 +243,20 @@ const referenceRetrieval = {
           text:
             "Unselected text cites https://unselected.example.test/ignored.",
         },
+        // Keep catalog > MAX_EXCERPTS_PER_SOURCE so semantic selection is
+        // scheduled; tiny catalogs skip generate_object and checkpoint early.
+        {
+          chunk_id: "web-source-1:chunk:3",
+          text: "Padding chunk three for closed-catalog selector threshold.",
+        },
+        {
+          chunk_id: "web-source-1:chunk:4",
+          text: "Padding chunk four for closed-catalog selector threshold.",
+        },
+        {
+          chunk_id: "web-source-1:chunk:5",
+          text: "Padding chunk five for closed-catalog selector threshold.",
+        },
       ],
     }],
   },

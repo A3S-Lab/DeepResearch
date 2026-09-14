@@ -87,27 +87,22 @@ const mergedSelection = await sandbox.__deepResearchRun(
   },
 );
 assert.equal(mergedSelection.type, "schedule_step");
-assert.equal(mergedSelection.step_id, "select_evidence_chunks");
-assert.match(
-  mergedSelection.input.prompt,
-  /A workspace source establishes its contents, but not that it belongs to an active build/,
-);
-const mergedPacket = JSON.parse(
-  mergedSelection.input.prompt.split("CLOSED_EVIDENCE_PACKET=")[1],
-);
-assert.equal(mergedPacket.sources.length, 2);
+// Tiny closed catalogs skip the multi-minute generate_object selector and
+// promote excerpts through closed-catalog deterministic selection.
+assert.equal(mergedSelection.step_id, "checkpoint_initial_retrieval");
 assert.equal(
-  new Set(mergedPacket.sources.map((source) => source.source_id)).size,
-  2,
+  mergedSelection.input.research.metadata.closed_catalog_deterministic_fallback,
+  true,
 );
-assert.equal(
-  new Set(
-    mergedPacket.sources.flatMap((source) =>
-      source.chunks.map((chunk) => chunk.chunk_id),
-    ),
-  ).size,
-  2,
+assert.equal(mergedSelection.input.research.metadata.catalog_chunk_count, 2);
+assert.equal(mergedSelection.input.research.metadata.source_count, 2);
+assert.equal(mergedSelection.input.research.results.length, 2);
+const mergedSourceIds = new Set(
+  mergedSelection.input.research.results.flatMap((result) =>
+    (result.structured?.sources || []).map((source) => source.source_id),
+  ),
 );
+assert.equal(mergedSourceIds.size, 2);
 function successfulReadBatch(request) {
   const sections = request.invocations.map((invocation, index) => {
     const offset = invocation.args.offset;
@@ -513,10 +508,30 @@ const splitCoverageBootstrap = {
       title: "src/runtime.rs",
       url_or_path: "src/runtime.rs",
       reliability: "Host-restored workspace evidence.",
-      chunks: [{
-        chunk_id: "bootstrap-source:chunk:1",
-        text: "This source establishes both transitions.",
-      }],
+      // Keep the closed catalog larger than MAX_EXCERPTS_PER_SOURCE so the
+      // semantic selector is still scheduled (tiny catalogs skip it).
+      chunks: [
+        {
+          chunk_id: "bootstrap-source:chunk:1",
+          text: "This source establishes both transitions.",
+        },
+        {
+          chunk_id: "bootstrap-source:chunk:2",
+          text: "Extra closed-catalog padding chunk two.",
+        },
+        {
+          chunk_id: "bootstrap-source:chunk:3",
+          text: "Extra closed-catalog padding chunk three.",
+        },
+        {
+          chunk_id: "bootstrap-source:chunk:4",
+          text: "Extra closed-catalog padding chunk four.",
+        },
+        {
+          chunk_id: "bootstrap-source:chunk:5",
+          text: "Extra closed-catalog padding chunk five.",
+        },
+      ],
     }],
   },
   errors: [],
