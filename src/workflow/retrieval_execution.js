@@ -628,15 +628,15 @@
     !usesSelectorShards &&
     sourceReduction.packet &&
     !outputs[STEP_SELECT] &&
-    !failures[STEP_SELECT] &&
-    // Tiny closed catalogs cannot gain from a multi-minute selector call:
-    // every retained chunk already fits the excerpt budget, so promote them
-    // through the closed deterministic path instead of waiting for timeout.
-    !(
-      admission.chunk_count > 0 &&
-      admission.chunk_count <= MAX_EXCERPTS_PER_SOURCE
-    )
+    !failures[STEP_SELECT]
   ) {
+    // Always schedule semantic selection for the initial catalog, including
+    // tiny closed packets. Deterministic promotion leaves source_coverage
+    // empty and therefore cannot close completion criteria; using it as the
+    // preferred path for small catalogs demotes otherwise synthesizable
+    // research to gap-heavy / Qualified outcomes. Keep
+    // closedCatalogDeterministicSelection only as the post-failure fallback
+    // inside resolveClosedEvidenceSelection.
     return {
       type: "schedule_step",
       step_id: STEP_SELECT,
@@ -662,27 +662,19 @@
     sourceReduction.error || "",
     selectorFailure || "",
   ]);
-  const preferClosedDeterministic = !usesSelectorShards &&
-    admission.chunk_count > 0 &&
-    admission.chunk_count <= MAX_EXCERPTS_PER_SOURCE;
-  const resolvedSelection = preferClosedDeterministic
-    ? {
-      selector: closedCatalogDeterministicSelection(packet),
-      used_fallback: true,
-    }
-    : resolveClosedEvidenceSelection(
-      packet,
-      usesSelectorShards && sourceReduction.packet
-        ? {
-          chunk_ids: sourceReduction.packet.sources.flatMap((source) =>
-            source.chunks.map((chunk) => chunk.chunk_id)
-          ),
-          source_coverage: sourceReduction.source_coverage,
-          source_relevance: sourceReduction.source_relevance,
-        }
-        : structuredOutput(outputs[STEP_SELECT]),
-      retrievalErrors
-    );
+  const resolvedSelection = resolveClosedEvidenceSelection(
+    packet,
+    usesSelectorShards && sourceReduction.packet
+      ? {
+        chunk_ids: sourceReduction.packet.sources.flatMap((source) =>
+          source.chunks.map((chunk) => chunk.chunk_id)
+        ),
+        source_coverage: sourceReduction.source_coverage,
+        source_relevance: sourceReduction.source_relevance,
+      }
+      : structuredOutput(outputs[STEP_SELECT]),
+    retrievalErrors
+  );
   const primarySelection = materializeEvidence(
     packet,
     resolvedSelection.selector,
